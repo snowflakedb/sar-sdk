@@ -1,0 +1,152 @@
+{
+  "name": "@snowflake/sar-sdk",
+  "version": "0.1.0-dev.1",
+  "description": "Framework-neutral Snowflake App Runtime client for server-side Node.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/snowflakedb/sar-sdk.git",
+    "directory": "nodejs"
+  },
+  "keywords": [
+    "snowflake",
+    "sar",
+    "sdk",
+    "nodejs"
+  ],
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "packageManager": "npm@11.18.0",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "browser": "./dist/browser.js",
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./auth": {
+      "browser": "./dist/browser.js",
+      "import": {
+        "types": "./dist/auth.d.ts",
+        "default": "./dist/auth.js"
+      },
+      "require": {
+        "types": "./dist/auth.d.cts",
+        "default": "./dist/auth.cjs"
+      }
+    },
+    "./connections": {
+      "browser": "./dist/browser.js",
+      "import": {
+        "types": "./dist/connections.d.ts",
+        "default": "./dist/connections.js"
+      },
+      "require": {
+        "types": "./dist/connections.d.cts",
+        "default": "./dist/connections.cjs"
+      }
+    },
+    "./query": {
+      "browser": "./dist/browser.js",
+      "import": {
+        "types": "./dist/queries.d.ts",
+        "default": "./dist/queries.js"
+      },
+      "require": {
+        "types": "./dist/queries.d.cts",
+        "default": "./dist/queries.cjs"
+      }
+    },
+    "./http": {
+      "browser": "./dist/browser.js",
+      "import": {
+        "types": "./dist/account-http.d.ts",
+        "default": "./dist/account-http.js"
+      },
+      "require": {
+        "types": "./dist/account-http.d.cts",
+        "default": "./dist/account-http.cjs"
+      }
+    },
+    "./secrets": {
+      "browser": "./dist/browser.js",
+      "import": {
+        "types": "./dist/secret-client.d.ts",
+        "default": "./dist/secret-client.js"
+      },
+      "require": {
+        "types": "./dist/secret-client.d.cts",
+        "default": "./dist/secret-client.cjs"
+      }
+    },
+    "./driver": {
+      "browser": "./dist/browser.js",
+      "import": {
+        "types": "./dist/driver.d.ts",
+        "default": "./dist/driver.js"
+      },
+      "require": {
+        "types": "./dist/driver.d.cts",
+        "default": "./dist/driver.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "sideEffects": [
+    "./dist/browser.js",
+    "./dist/browser.cjs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsup && node scripts/build-types.mjs",
+    "prepack": "npm run build",
+    "prepublishOnly": "node -e \"throw new Error('Publishing is disabled for this pre-release package')\"",
+    "format": "prettier --write . ../*.md ../.github",
+    "format:check": "prettier --check . ../*.md ../.github",
+    "lint": "biome lint src tests scripts examples",
+    "knip": "knip",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tests/types/tsconfig.json",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:package": "npm run build && node scripts/test-package.mjs",
+    "api:check": "node scripts/check-api.mjs",
+    "api:update": "npm run build && node scripts/check-api.mjs --update",
+    "check": "npm run format:check && npm run lint && npm run knip && npm run typecheck && npm run test:coverage && npm run test:package && npm run api:check"
+  },
+  "dependencies": {
+    "smol-toml": "1.9.1",
+    "snowflake-sdk": "3.4.0",
+    "undici": "6.29.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "26.6.5",
+    "@typescript/typescript6": "6.0.2",
+    "@vitest/coverage-v8": "5.0.4",
+    "knip": "6.41.0",
+    "prettier": "3.9.10",
+    "publint": "0.3.25",
+    "rollup": "4.64.5",
+    "rollup-plugin-dts": "6.5.1",
+    "tsup": "8.5.1",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
+  }
+}

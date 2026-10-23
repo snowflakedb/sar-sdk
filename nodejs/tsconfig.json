@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "paths": {
+      "@snowflake/sar-sdk": ["./src/index.ts"],
+      "@snowflake/sar-sdk/auth": ["./src/auth.ts"],
+      "@snowflake/sar-sdk/driver": ["./src/driver.ts"],
+      "@snowflake/sar-sdk/connections": ["./src/connections.ts"],
+      "@snowflake/sar-sdk/query": ["./src/queries.ts"],
+      "@snowflake/sar-sdk/http": ["./src/account-http.ts"],
+      "@snowflake/sar-sdk/secrets": ["./src/secret-client.ts"]
+    },
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "skipLibCheck": false,
+    "declaration": true,
+    "sourceMap": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "tests/**/*.test.ts", "examples/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

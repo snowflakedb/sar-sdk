@@ -1,0 +1,87 @@
+# Copyright 2026 Snowflake Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Source changes need a changelog entry, and a pull request can't run fewer tests than its
+# base. The no-changelog and fewer-tests labels override them.
+name: PR guards
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+permissions:
+  contents: read
+jobs:
+  changelog:
+    name: Changelog entry
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Require a changelog entry for source changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          OVERRIDE: ${{ contains(github.event.pull_request.labels.*.name, 'no-changelog') }}
+        run: |
+          changed=$(git diff --name-only "$BASE_SHA" HEAD)
+          if ! grep -q '^nodejs/src/' <<<"$changed"; then
+            echo "No changes in nodejs/src."
+          elif grep -qx 'nodejs/CHANGELOG.md' <<<"$changed"; then
+            echo "Source changes come with a changelog entry."
+          elif [[ "$OVERRIDE" == "true" ]]; then
+            echo "Source changes without a changelog entry, allowed by the no-changelog label."
+          else
+            echo "::error::nodejs/src changed but nodejs/CHANGELOG.md didn't. Add an entry under Unreleased, or add the no-changelog label if the change isn't user-visible."
+            exit 1
+          fi
+  test-count:
+    name: Test count
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: nodejs/package-lock.json
+      - run: npm install --global npm@11.18.0 --ignore-scripts
+      # Counts tests that ran, so skipped tests count as removed.
+      - name: Compare with the base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          OVERRIDE: ${{ contains(github.event.pull_request.labels.*.name, 'fewer-tests') }}
+        run: |
+          count() {
+            (cd "$1" && npm ci --ignore-scripts --no-audit --no-fund >/dev/null &&
+              npx vitest run --reporter=json --outputFile="$RUNNER_TEMP/$2.json" >/dev/null) || true
+            jq '.numPassedTests + .numFailedTests' "$RUNNER_TEMP/$2.json"
+          }
+          git worktree add --detach "$RUNNER_TEMP/base" "$BASE_SHA"
+          head=$(count "$GITHUB_WORKSPACE/nodejs" head)
+          base=$(count "$RUNNER_TEMP/base/nodejs" base)
+          echo "Tests run: $base on the base, $head with this pull request."
+          if (( head < base )); then
+            if [[ "$OVERRIDE" == "true" ]]; then
+              echo "Fewer tests than the base, allowed by the fewer-tests label."
+            else
+              echo "::error::This pull request runs $((base - head)) fewer tests than its base. Restore them, or add the fewer-tests label if removing them is intended."
+              exit 1
+            fi
+          fi

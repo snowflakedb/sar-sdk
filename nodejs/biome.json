@@ -1,0 +1,44 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "root": "..", "useIgnoreFile": true },
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnreachable": "error",
+        "noUnsafeFinally": "error",
+        "noInvalidConstructorSuper": "error",
+        "noConstantCondition": "error"
+      },
+      "suspicious": {
+        "noDoubleEquals": "error",
+        "noDebugger": "error",
+        "noDuplicateParameters": "error",
+        "noFallthroughSwitchClause": "error",
+        "noFocusedTests": "error",
+        "noAsyncPromiseExecutor": "error",
+        "noMisleadingCharacterClass": "error"
+      },
+      "style": {
+        "noNonNullAssertion": "off"
+      },
+      "nursery": {
+        "noFloatingPromises": "error"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["tests/**"],
+      "linter": { "rules": { "complexity": { "useArrowFunction": "off" } } }
+    },
+    {
+      "includes": ["tests/types/**"],
+      "linter": { "rules": { "nursery": { "noFloatingPromises": "off" } } }
+    }
+  ]
+}
