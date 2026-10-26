@@ -139,14 +139,14 @@
     "@biomejs/biome": "2.5.15",
     "@types/node": "26.6.5",
     "@typescript/typescript6": "6.0.2",
-    "@vitest/coverage-v8": "5.0.4",
-    "knip": "6.41.0",
+    "@vitest/coverage-v8": "5.0.5",
+    "knip": "6.42.0",
     "prettier": "3.9.10",
     "publint": "0.3.25",
-    "rollup": "4.64.5",
+    "rollup": "4.64.10",
     "rollup-plugin-dts": "6.5.1",
     "tsup": "8.5.1",
     "typescript": "7.0.2",
-    "vitest": "5.0.4"
+    "vitest": "5.0.5"
   }
 }
