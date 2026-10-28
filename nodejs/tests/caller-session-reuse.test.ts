@@ -17,12 +17,17 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions, fromCredentials } from "../src/auth.js";
+import { createConnectionOptions } from "../src/auth.js";
 import { nextSteps } from "../src/errors.js";
 import { fakeDriver } from "./fake-driver.js";
 import type { PoolOptions } from "../src/types.js";
 
-const target = { account: "org-account", accessUrl: "https://org-account.snowflakecomputing.com" };
+const connection = {
+  account: "org-account",
+  accessUrl: "https://org-account.snowflakecomputing.com",
+  authenticator: "OAUTH",
+  token: "test-token",
+};
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => {
@@ -35,10 +40,7 @@ function setup(fakeOptions: Parameters<typeof fakeDriver>[0] = {}, pool?: PoolOp
   const fake = fakeDriver(fakeOptions);
   const client = createSarClient({
     driver: fake.driver,
-    connectionOptions: createConnectionOptions(
-      [fromCredentials({ target, credential: { type: "oauth", token: "test-token" } })],
-      { environment: "deployed", platform: "spcs" },
-    ),
+    connectionOptions: createConnectionOptions(connection),
     ...(pool ? { pool } : {}),
   });
   const view = (user = "alice") =>
@@ -273,10 +275,7 @@ describe("caller transactions", () => {
     const fake = fakeDriver();
     const asOwner = createSarClient({
       driver: fake.driver,
-      connectionOptions: createConnectionOptions(
-        [fromCredentials({ target, credential: { type: "oauth", token: "test-token" } })],
-        { environment: "deployed", platform: "spcs", callerAsOwner: true },
-      ),
+      connectionOptions: createConnectionOptions(connection, { callerAsOwner: true }),
     });
     const ownerView = () =>
       asOwner.asCaller({ headers: new Headers({ "sf-context-current-user-token": "alice" }) });

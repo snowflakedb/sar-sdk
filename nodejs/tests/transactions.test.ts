@@ -18,11 +18,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type snowflake from "snowflake-sdk";
 import { createSarClient, type SarError } from "../src/index.js";
-import {
-  createConnectionOptions,
-  fromCredentials,
-  type ConnectionOptionsFactoryOptions,
-} from "../src/auth.js";
+import { createConnectionOptions } from "../src/auth.js";
 import { createConnectionManager } from "../src/connections.js";
 import { createQueryClient } from "../src/queries.js";
 import { temporalSessionSql } from "../src/results.js";
@@ -37,30 +33,31 @@ import { failedQueryError, fakeDriver } from "./fake-driver.js";
 type FakeOptions = Parameters<typeof fakeDriver>[0];
 type Connection = ReturnType<typeof fakeDriver>["connections"][number];
 
-const target = { account: "org-account", accessUrl: "https://org-account.snowflakecomputing.com" };
-const credentials = () =>
-  fromCredentials({ target, credential: { type: "oauth", token: "test-token" } });
+const connection = {
+  account: "org-account",
+  accessUrl: "https://org-account.snowflakecomputing.com",
+  authenticator: "OAUTH",
+  token: "test-token",
+};
 function setup(
   fakeOptions: FakeOptions = {},
-  overrides: Pick<SarClientOptions, "pool" | "timeouts" | "results"> &
-    Pick<ConnectionOptionsFactoryOptions, "environment" | "platform"> = {},
+  overrides: Pick<SarClientOptions, "pool" | "timeouts" | "results"> = {},
 ) {
   const fake = fakeDriver(fakeOptions);
-  const { environment, platform, ...execution } = overrides;
   const client = createSarClient({
     driver: fake.driver,
-    connectionOptions: createConnectionOptions([credentials()], { environment, platform }),
-    ...execution,
+    connectionOptions: createConnectionOptions(connection),
+    ...overrides,
   });
   return { client, ...fake };
 }
 function reusable(fakeOptions: FakeOptions = {}) {
   const fake = fakeDriver(fakeOptions);
   const reset = vi.fn(async () => {});
-  const manager = createConnectionManager(
-    createConnectionOptions([credentials()], { environment: "local" }),
-    { driver: fake.driver, pool: { mode: "reusable", reset, maxConnections: 1 } },
-  );
+  const manager = createConnectionManager(createConnectionOptions(connection), {
+    driver: fake.driver,
+    pool: { mode: "reusable", reset, maxConnections: 1 },
+  });
   return { ...fake, reset, manager, queries: createQueryClient(manager) };
 }
 function deferred() {
@@ -468,10 +465,7 @@ describe("transaction cancellation and shutdown", () => {
     await client.close();
   });
   it("rolls back an aborted caller transaction before its deferred logout", async () => {
-    const { client, connections } = setup(
-      { status: "RUNNING" },
-      { environment: "deployed", platform: "spcs" },
-    );
+    const { client, connections } = setup({ status: "RUNNING" });
     const caller = client.asCaller({
       headers: new Headers({ "sf-context-current-user-token": "alice" }),
     });
@@ -675,10 +669,7 @@ describe("transaction cancellation and shutdown", () => {
     expect((await client.diagnostics()).activeConnections).toBe(0);
   });
   it("does not roll back a caller transaction at forced shutdown", async () => {
-    const { client, connections } = setup(
-      { status: "RUNNING" },
-      { environment: "deployed", platform: "spcs" },
-    );
+    const { client, connections } = setup({ status: "RUNNING" });
     const caller = client.asCaller({ token: "alice" });
     const pending = caller.transaction(async (tx) => tx.query("UPDATE T SET X = 1"), {
       signal: new AbortController().signal,
@@ -695,10 +686,9 @@ describe("transaction cancellation and shutdown", () => {
   });
   it("does not roll back when a standalone query client shuts down", async () => {
     const fake = fakeDriver({ status: "RUNNING" });
-    const manager = createConnectionManager(
-      createConnectionOptions([credentials()], { environment: "local" }),
-      { driver: fake.driver },
-    );
+    const manager = createConnectionManager(createConnectionOptions(connection), {
+      driver: fake.driver,
+    });
     const queries = createQueryClient(manager);
     const pending = queries.transaction(async (tx) => tx.query("UPDATE T SET X = 1"), {
       signal: new AbortController().signal,
@@ -722,7 +712,7 @@ describe("transaction cancellation and shutdown", () => {
     "does not roll back when the %s shuts down while the callback runs",
     async (closer) => {
       const fake = fakeDriver();
-      const auth = createConnectionOptions([credentials()], { environment: "local" });
+      const auth = createConnectionOptions(connection);
       const client = createSarClient({ driver: fake.driver, connectionOptions: auth });
       const manager = createConnectionManager(auth, { driver: fake.driver });
       const queries = createQueryClient(manager);
@@ -745,7 +735,6 @@ describe("transaction cancellation and shutdown", () => {
       expect(fake.connections[0]?.destroy).toHaveBeenCalledOnce();
       await Promise.allSettled([client.close(), queries.close()]);
       await manager.close().catch(() => {});
-      await auth.close();
     },
   );
   it("lets a running transaction commit during the shutdown grace period", async () => {
@@ -779,7 +768,7 @@ describe("transaction cancellation and shutdown", () => {
 
 describe("transaction scopes and sessions", () => {
   it("uses caller credentials and rolls back before the deferred caller logout", async () => {
-    const { client, connections } = setup({}, { environment: "deployed", platform: "spcs" });
+    const { client, connections } = setup();
     const caller = client.asCaller({
       headers: new Headers({ "sf-context-current-user-token": "alice" }),
     });
@@ -812,10 +801,9 @@ describe("transaction scopes and sessions", () => {
   });
   it("is available on standalone and caller-scoped query clients", async () => {
     const fake = fakeDriver();
-    const manager = createConnectionManager(
-      createConnectionOptions([credentials()], { environment: "deployed", platform: "spcs" }),
-      { driver: fake.driver },
-    );
+    const manager = createConnectionManager(createConnectionOptions(connection), {
+      driver: fake.driver,
+    });
     const queries = createQueryClient(manager);
     const scoped = createQueryClient(manager.asCaller({ token: "bob" }));
     for (const scope of [queries, queries.asCaller({ token: "alice" }), scoped])

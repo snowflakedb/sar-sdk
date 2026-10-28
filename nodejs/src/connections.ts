@@ -16,13 +16,7 @@
  */
 
 import type snowflake from "snowflake-sdk";
-import {
-  createConnectionOptions,
-  snapshotProvider,
-  optionsScope,
-  providerDiagnostics,
-  providerLogger,
-} from "./auth-client.js";
+import { snapshotProvider, optionsScope, unconfiguredOptions } from "./auth-client.js";
 import type { ConnectionOptionsProvider } from "./auth-client.js";
 import { connect } from "./driver-adapter.js";
 import {
@@ -35,7 +29,7 @@ import {
   SarError,
   snowflakeDetails,
 } from "./errors.js";
-import { Budget, checkAbort, deadline, elapsed, pause } from "./lifecycle.js";
+import { Budget, checkAbort, deadline, elapsed, pause, safeLogger } from "./lifecycle.js";
 import { completion, registerScope, type Lease } from "./lease.js";
 import { clientOptions } from "./options.js";
 import { SessionStore } from "./session-store.js";
@@ -60,11 +54,10 @@ export function createConnectionManager(
   provider?: ConnectionOptionsProvider,
   input: ConnectionManagerOptions = {},
 ): ConnectionManager {
-  keys(input, ["pool", "timeouts", "driver"], "connection manager");
+  keys(input, ["pool", "timeouts", "driver", "logger"], "connection manager");
   const options = clientOptions(input);
-  const owned = provider === undefined ? createConnectionOptions() : undefined;
-  const auth = snapshotProvider(provider ?? owned!);
-  const log = providerLogger(auth);
+  const auth = snapshotProvider(provider ?? unconfiguredOptions);
+  const log = safeLogger(options.logger);
   const ownerOptions = optionsScope(auth);
   const budget = new Budget(options.pool?.maxConnections ?? 10, options.pool?.maxQueue ?? 100);
   const store = new SessionStore(options.pool);
@@ -135,9 +128,9 @@ export function createConnectionManager(
     let resource: ReturnType<SessionStore["attach"]> | undefined;
     let releaseSlot: (() => void) | undefined;
     let abandoned = false;
-    const timeout = settings.authTimeoutMs ?? options.timeouts?.authMs ?? 120_000;
+    const timeout = settings.authTimeoutMs ?? 120_000;
     const expires = performance.now() + timeout;
-    const deferLogout = credentials.mode === "caller" && credentials.callerPresent && !detached;
+    const deferLogout = credentials.mode === "caller" && !detached;
     const checkAuthentication = () => {
       if (abandoned) fail("ABORTED", "Authentication was abandoned");
       checkAbort(signal);
@@ -151,7 +144,7 @@ export function createConnectionManager(
       checkAuthentication();
       if (!resource) {
         const started = performance.now();
-        const resolved = await credentials.acquire({ signal, timeoutMs: timeout });
+        const resolved = credentials.options();
         checkAuthentication();
         driverPromise ??= options.driver
           ? Promise.resolve(options.driver)
@@ -248,7 +241,7 @@ export function createConnectionManager(
       if (isSarError(error)) throw error;
       throw new SarError(
         "AUTH_FAILED",
-        "Snowflake authentication failed; the selected source was not changed",
+        "Snowflake authentication failed while opening the configured connection",
         { completion: "not-submitted", ...snowflakeDetails(error) },
         error,
       );
@@ -262,16 +255,7 @@ export function createConnectionManager(
       log,
       detached: {
         mode: credentials.mode,
-        callerPresent: credentials.callerPresent,
-        acquire: (settings?: QueryOptions) => {
-          if (!credentials.callerPresent)
-            throw new SarError(
-              "CALLER_CONTEXT_REQUIRED",
-              "Detached queries require caller credentials even locally",
-              { nextStep: nextSteps.ingress },
-            );
-          return acquire(credentials, settings, true);
-        },
+        acquire: (settings?: QueryOptions) => acquire(credentials, settings, true),
       },
     };
   }
@@ -330,7 +314,6 @@ export function createConnectionManager(
     },
     async diagnostics() {
       return {
-        ...(await providerDiagnostics(auth)),
         sessionMode: options.pool?.mode ?? "isolated",
         activeConnections: budget.active,
         queuedOperations: budget.queued,
@@ -363,7 +346,6 @@ export function createConnectionManager(
             }
           }),
         );
-        await owned?.close();
         try {
           await idleClosed;
         } catch (error) {

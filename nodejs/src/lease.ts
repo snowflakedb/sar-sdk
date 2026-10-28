@@ -18,7 +18,7 @@
 import type snowflake from "snowflake-sdk";
 import type { ConnectionScope, LogEvent, QueryOptions } from "./types.js";
 import type { SessionState } from "./session-store.js";
-import { fail, nextSteps, SarError } from "./errors.js";
+import { fail } from "./errors.js";
 
 export type Lease = {
   connection: snowflake.Connection;
@@ -45,11 +45,10 @@ type ScopeInternals = {
   /** A transaction's lease excludes other work for the same caller context until it's released. */
   acquire(settings?: QueryOptions, transaction?: boolean): Promise<Lease>;
   handleIdleTimeoutMs: number;
-  /** The options factory's logger, which never throws. */
+  /** The client's logger, which never throws. */
   log?: (event: LogEvent) => void;
   detached?: {
     readonly mode: "owner" | "caller";
-    readonly callerPresent: boolean;
     acquire(settings?: QueryOptions): Promise<Lease>;
   };
 };
@@ -70,11 +69,5 @@ export function detachedInternals(scope: ConnectionScope) {
   const found = connectionInternals(scope).detached;
   if (!found || typeof found.acquire !== "function")
     fail("DETACHED_QUERY_NOT_SUPPORTED", "Connection scope does not support detached queries");
-  if (!found.callerPresent)
-    throw new SarError(
-      "CALLER_CONTEXT_REQUIRED",
-      "Detached queries require caller credentials even locally",
-      { nextStep: nextSteps.ingress },
-    );
   return found;
 }

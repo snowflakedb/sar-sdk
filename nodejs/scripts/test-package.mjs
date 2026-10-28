@@ -103,9 +103,10 @@ try {
   const cjs = `const assert = require('node:assert/strict');
 const before = new Set(Object.keys(require.cache));
 const { createSarClient, SarError, isSarError } = require('@snowflake/sar-sdk');
-const { fromTokenFile, createConnectionOptions } = require('@snowflake/sar-sdk/auth');
-const client = createSarClient({connectionOptions:createConnectionOptions([])});
-assert.equal(typeof fromTokenFile, 'function');
+const { fromToml, fromPlatform, createConnectionOptions } = require('@snowflake/sar-sdk/auth');
+const client = createSarClient({connectionOptions:createConnectionOptions({account:'synthetic',authenticator:'OAUTH',token:'synthetic'})});
+assert.equal(typeof fromToml, 'function');
+assert.equal(typeof fromPlatform, 'function');
 assert.equal(typeof client.fetch, 'function');
 assert.equal(typeof client.asCaller({token:'synthetic'}).fetch, 'function');
 for (const name of ['submitDetached','pollQuery','streamQuery','getQueryStatus','cancelQuery']) {
@@ -121,7 +122,7 @@ client.close().then(() => console.log('CommonJS: lazy package passed'));
   process.stdout.write(run(process.execPath, ["smoke.cjs"], consumer));
   await writeFile(
     path.join(consumer, "smoke.mjs"),
-    `import {createSarClient} from '@snowflake/sar-sdk'; import {fromCredentials,createConnectionOptions} from '@snowflake/sar-sdk/auth'; const client=createSarClient({connectionOptions:createConnectionOptions([])}); if(typeof client.fetch!=='function'||typeof client.asCaller({token:'synthetic'}).fetch!=='function'||'rest' in client)throw Error('invalid fetch API'); await client.close(); if(typeof fromCredentials!=='function')throw Error('missing export'); console.log('ESM: package passed');`,
+    `import {createSarClient} from '@snowflake/sar-sdk'; import {fromToml,fromPlatform,createConnectionOptions} from '@snowflake/sar-sdk/auth'; const client=createSarClient({connectionOptions:createConnectionOptions({account:'synthetic',authenticator:'OAUTH',token:'synthetic'})}); if(typeof client.fetch!=='function'||typeof client.asCaller({token:'synthetic'}).fetch!=='function'||'rest' in client)throw Error('invalid fetch API'); await client.close(); if(typeof fromToml!=='function'||typeof fromPlatform!=='function')throw Error('missing export'); console.log('ESM: package passed');`,
   );
   process.stdout.write(run(process.execPath, ["smoke.mjs"], consumer));
   await writeFile(
@@ -133,7 +134,7 @@ const {createConnectionManager} = require('@snowflake/sar-sdk/connections');
 const {createQueryClient} = require('@snowflake/sar-sdk/query');
 const {createFetchClient} = require('@snowflake/sar-sdk/http');
 const {createSecrets} = require('@snowflake/sar-sdk/secrets');
-const auth=createConnectionOptions([]);
+const auth=createConnectionOptions({account:'synthetic',authenticator:'OAUTH',token:'synthetic'});
 const manager=createConnectionManager(auth);
 const queries=createQueryClient(manager);
 const http=createFetchClient(auth);
@@ -142,7 +143,7 @@ assert.equal(typeof manager.withConnection,'function');
 assert.equal('query' in manager,false);
 assert.equal('asCaller' in createQueryClient(manager.asCaller({token:'synthetic'})),false);
 assert.equal(Object.keys(require.cache).some(name=>/[\\\\/]snowflake-sdk[\\\\/]/.test(name)),false);
-Promise.all([queries.close(),manager.close(),http.close(),secrets.close()]).then(()=>auth.close());
+void Promise.all([queries.close(),manager.close(),http.close(),secrets.close()]);
 `,
   );
   process.stdout.write(run(process.execPath, ["composition.cjs"], consumer));
@@ -181,7 +182,7 @@ const cjsAuth=require('@snowflake/sar-sdk/auth');
 const cjsConnections=require('@snowflake/sar-sdk/connections');
 const cjsQueries=require('@snowflake/sar-sdk/query');
 for(const [authFactory,managerFactory,queryFactory] of [[createConnectionOptions,cjsConnections.createConnectionManager,createQueryClient],[cjsAuth.createConnectionOptions,createConnectionManager,cjsQueries.createQueryClient]]) {
- const auth=authFactory([]);
+ const auth=authFactory({account:'synthetic',authenticator:'OAUTH',token:'synthetic'});
  const manager=managerFactory(auth);
  const query=queryFactory(manager);
  const caller=queryFactory(manager.asCaller({token:'synthetic'}));
@@ -190,14 +191,14 @@ for(const [authFactory,managerFactory,queryFactory] of [[createConnectionOptions
  await assert.rejects(query.pollQuery(reference,{signal:AbortSignal.abort()}),{code:'ABORTED'});
  await assert.rejects(caller.pollQuery({...reference,mode:'caller'},{signal:AbortSignal.abort()}),{code:'ABORTED'});
  await assert.rejects(query.pollQuery(reference,{waitMs:0}),{code:'INVALID_OPTIONS'});
- await caller.close(); await query.close(); await manager.close(); await auth.close();
+ await caller.close(); await query.close(); await manager.close();
  // A callerAsOwner factory makes caller views owner scopes in the other module format too.
- const ownerAuth=authFactory([],{callerAsOwner:true});
+ const ownerAuth=authFactory({account:'synthetic',authenticator:'OAUTH',token:'synthetic'},{callerAsOwner:true});
  const ownerManager=managerFactory(ownerAuth);
  const ownerCaller=queryFactory(ownerManager.asCaller({token:'synthetic'}));
  await assert.rejects(ownerCaller.pollQuery(reference,{signal:AbortSignal.abort()}),{code:'ABORTED'});
  await assert.rejects(ownerCaller.pollQuery({...reference,mode:'caller'},{signal:AbortSignal.abort()}),{code:'QUERY_IDENTITY_MISMATCH'});
- await ownerCaller.close(); await ownerManager.close(); await ownerAuth.close();
+ await ownerCaller.close(); await ownerManager.close();
 }
 console.log('Mixed ESM/CommonJS component composition passed');
 `,
@@ -208,13 +209,13 @@ console.log('Mixed ESM/CommonJS component composition passed');
     `
 import assert from 'node:assert/strict';
 import snowflake from 'snowflake-sdk';
-import {createConnectionOptions,fromCredentials} from '@snowflake/sar-sdk/auth';
-const options=createConnectionOptions(fromCredentials({target:{account:'synthetic'},credential:{type:'oauth',token:'synthetic'}}));
-const native=await options.getOwnerOptions();
+import {createConnectionOptions} from '@snowflake/sar-sdk/auth';
+const options=createConnectionOptions({account:'synthetic',authenticator:'OAUTH',token:'synthetic'});
+const native=options.getOwnerOptions();
 const connection=snowflake.createConnection(native);
 assert.equal(typeof connection.execute,'function');
-const pool=snowflake.createPool(await options.getOwnerOptions(),{min:0,max:1,autostart:false});
-await pool.drain(); await pool.clear(); await options.close();
+const pool=snowflake.createPool(options.getOwnerOptions(),{min:0,max:1,autostart:false});
+await pool.drain(); await pool.clear();
 console.log('Native driver connection and non-started pool accept generated options');
 `,
   );

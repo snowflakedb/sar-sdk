@@ -15,9 +15,17 @@
  * limitations under the License.
  */
 
-import { getCallerUserToken } from "./auth-manager.js";
 import { fail, keys } from "./errors.js";
-import type { CallerContext } from "./types.js";
+import type { CallerContext, HeaderReader } from "./types.js";
+
+/** Extracts caller context; it does not validate the token or authenticate ingress. */
+export function getCallerUserToken(headers: HeaderReader): string | null {
+  const token = headers.get("sf-context-current-user-token");
+  if (token === null || token === undefined) return null;
+  if (typeof token !== "string" || !token.trim())
+    fail("CALLER_CONTEXT_REQUIRED", "Present caller token cannot be empty");
+  return token;
+}
 
 export function callerToken(context: CallerContext): string | null {
   keys(context, ["headers", "token"], "caller");

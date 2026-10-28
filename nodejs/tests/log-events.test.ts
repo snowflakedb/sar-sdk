@@ -18,11 +18,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type snowflake from "snowflake-sdk";
 import { createSarClient } from "../src/index.js";
-import {
-  createConnectionOptions,
-  fromCredentials,
-  type ConnectionOptionsProvider,
-} from "../src/auth.js";
+import { createConnectionOptions, type ConnectionOptionsProvider } from "../src/auth.js";
 import { createConnectionManager } from "../src/connections.js";
 import { createQueryClient } from "../src/queries.js";
 import type { LogEvent, Transaction } from "../src/types.js";
@@ -30,22 +26,23 @@ import { failedQueryError, fakeDriver } from "./fake-driver.js";
 import { deferred, fakeQueryService } from "./fake-query-service.js";
 
 type Connection = ReturnType<typeof fakeDriver>["connections"][number];
-const target = { account: "org-account", accessUrl: "https://org-account.snowflakecomputing.com" };
 const token = "token-marker-5b1a";
 const ms = expect.any(Number);
 
-function factory(logger: (event: LogEvent) => void) {
-  return createConnectionOptions(
-    [fromCredentials({ target, credential: { type: "oauth", token } })],
-    { environment: "deployed", platform: "spcs", logger },
-  );
-}
+const factory = () =>
+  createConnectionOptions({
+    account: "org-account",
+    accessUrl: "https://org-account.snowflakecomputing.com",
+    authenticator: "OAUTH",
+    token,
+  });
 function setup(fakeOptions: Parameters<typeof fakeDriver>[0] = {}) {
   const events: LogEvent[] = [];
   const fake = fakeDriver(fakeOptions);
   const client = createSarClient({
     driver: fake.driver,
-    connectionOptions: factory((event) => events.push(event)),
+    connectionOptions: factory(),
+    logger: (event) => events.push(event),
   });
   return { ...fake, client, events };
 }
@@ -54,7 +51,8 @@ function detachedSetup() {
   const service = fakeQueryService();
   const client = createSarClient({
     driver: service.driver,
-    connectionOptions: factory((event) => events.push(event)),
+    connectionOptions: factory(),
+    logger: (event) => events.push(event),
   });
   return { ...service, client, events };
 }
@@ -65,7 +63,6 @@ const sqlTexts = (connection: Connection | undefined) =>
 
 afterEach(() => {
   vi.useRealTimers();
-  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -176,16 +173,11 @@ describe("query log events", () => {
     await client.close();
   });
   it("prints one line per query from the logger passed to createSarClient", async () => {
-    for (const key of Object.keys(process.env))
-      if (key.startsWith("SNOWFLAKE_")) vi.stubEnv(key, undefined);
-    vi.stubEnv("SNOWFLAKE_ACCOUNT", "org-account");
-    vi.stubEnv("SNOWFLAKE_AUTHENTICATOR", "oauth");
-    vi.stubEnv("SNOWFLAKE_TOKEN", token);
     const print = vi.spyOn(console, "log").mockImplementation(() => {});
     const fake = fakeDriver();
     const client = createSarClient({
       driver: fake.driver,
-      environment: "deployed",
+      connectionOptions: factory(),
       logger: (event) => console.log("[snowflake]", JSON.stringify(event)),
     });
     await client.query("SELECT 1");
@@ -204,11 +196,13 @@ describe("query log events", () => {
       ],
     ]);
   });
-  it("logs through standalone components that share the factory", async () => {
+  it("logs through standalone components that share the manager", async () => {
     const events: LogEvent[] = [];
     const fake = fakeDriver();
-    const auth = factory((event) => events.push(event));
-    const manager = createConnectionManager(auth, { driver: fake.driver });
+    const manager = createConnectionManager(factory(), {
+      driver: fake.driver,
+      logger: (event) => events.push(event),
+    });
     const queries = createQueryClient(manager);
     const scoped = createQueryClient(manager.asCaller({ token: "alice" }));
     await manager.connect();
@@ -228,7 +222,6 @@ describe("query log events", () => {
     ]);
     await Promise.all([queries.close(), scoped.close()]);
     await manager.close();
-    await auth.close();
   });
 });
 
@@ -355,7 +348,11 @@ describe("logger boundaries", () => {
       const fake = fakeDriver({
         sqlErrors: { "SELECT 2": Object.assign(new Error("synthetic"), { code: "002003" }) },
       });
-      const client = createSarClient({ driver: fake.driver, connectionOptions: factory(logger) });
+      const client = createSarClient({
+        driver: fake.driver,
+        connectionOptions: factory(),
+        logger,
+      });
       expect((await client.query("SELECT 1")).rows).toEqual([{ VALUE: "9007199254740993" }]);
       await expect(client.query("SELECT 2")).rejects.toMatchObject({
         code: "QUERY_FAILED",
@@ -367,16 +364,21 @@ describe("logger boundaries", () => {
     }
     expect(calls).toBe(12);
   });
-  it("emits nothing for custom options providers, even ones built from a factory with a logger", async () => {
-    const logger = vi.fn();
-    const auth = factory(logger);
+  it("logs to the client's logger for custom options providers, and nothing without one", async () => {
+    const auth = factory();
     const delegating: ConnectionOptionsProvider = {
-      getOwnerOptions: (options) => auth.getOwnerOptions(options),
-      getCallerOptions: (context, options) => auth.getCallerOptions(context, options),
+      getOwnerOptions: () => auth.getOwnerOptions(),
+      getCallerOptions: (callerToken) => auth.getCallerOptions(callerToken),
     };
     for (const provider of [delegating, { ...auth }]) {
+      const events: LogEvent[] = [];
       const fake = fakeDriver();
-      const client = createSarClient({ driver: fake.driver, connectionOptions: provider });
+      const client = createSarClient({
+        driver: fake.driver,
+        connectionOptions: provider,
+        logger: (event) => events.push(event),
+      });
+      // A manager sharing the provider but given no logger logs nowhere.
       const manager = createConnectionManager(provider, { driver: fake.driver });
       const queries = createQueryClient(manager);
       await client.query("SELECT 1");
@@ -385,11 +387,16 @@ describe("logger boundaries", () => {
       await queries.query("SELECT 3");
       await manager.connect();
       expect(fake.connections).toHaveLength(4);
+      expect(events).toStrictEqual([
+        { event: "session-opened", mode: "owner", durationMs: ms },
+        { event: "query-succeeded", queryId: "query-1", durationMs: ms, rowCount: 1 },
+        { event: "session-opened", mode: "caller", durationMs: ms },
+        { event: "query-succeeded", queryId: "query-2", durationMs: ms, rowCount: 1 },
+        { event: "query-failed", code: "INVALID_OPTIONS", durationMs: ms },
+      ]);
       await Promise.all([client.close(), queries.close()]);
       await manager.close();
     }
-    expect(logger).not.toHaveBeenCalled();
-    await auth.close();
   });
   it("never logs SQL text, binds, rows, tokens, or error messages", async () => {
     const markers = {

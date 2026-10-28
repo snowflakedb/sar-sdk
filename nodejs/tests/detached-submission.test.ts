@@ -17,7 +17,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createConnectionManager } from "../src/connections.js";
-import { createConnectionOptions, fromCredentials } from "../src/auth.js";
+import { createConnectionOptions } from "../src/auth.js";
 import { detachedInternals } from "../src/lease.js";
 import { submitDetached } from "../src/detached.js";
 import { deferred, fakeQueryService } from "./fake-query-service.js";
@@ -26,13 +26,12 @@ import type { DetachedQueryOptions } from "../src/types.js";
 afterEach(() => vi.useRealTimers());
 function setup() {
   const fake = fakeQueryService();
-  const provider = createConnectionOptions(
-    fromCredentials({
-      target: { account: "test" },
-      credential: { type: "oauth", token: "synthetic" },
-    }),
-    { environment: "local" },
-  );
+  const provider = createConnectionOptions({
+    account: "test",
+    accessUrl: "https://test.snowflakecomputing.com",
+    authenticator: "OAUTH",
+    token: "synthetic",
+  });
   const reset = vi.fn(async () => {});
   const manager = createConnectionManager(provider, {
     driver: fake.driver,
@@ -195,7 +194,7 @@ describe("detached submission lifecycle", () => {
   it("rejects missing caller context and incompatible scopes", async () => {
     const { manager } = setup();
     expect(() => detachedInternals(manager.asCaller({ headers: new Headers() }))).toThrow(
-      /caller credentials/,
+      /carries no caller token/,
     );
     const oldScope = { withConnection: async () => {} };
     Object.defineProperty(oldScope, Symbol.for("@snowflake/sar-sdk/connection-scope/v1"), {

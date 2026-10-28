@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-import { createConnectionOptions } from "@snowflake/sar-sdk/auth";
+import { createConnectionOptions, fromDefault } from "@snowflake/sar-sdk/auth";
 import { createConnectionManager } from "@snowflake/sar-sdk/connections";
 import { createQueryClient } from "@snowflake/sar-sdk/query";
 import { createFetchClient } from "@snowflake/sar-sdk/http";
@@ -34,7 +34,10 @@ function execute(connection: Connection, sql: string): Promise<void> {
   });
 }
 export async function compositionExample(headers: Headers): Promise<void> {
-  const auth = createConnectionOptions();
+  // Your application chooses the connection options; the components share them and never close them.
+  const auth = createConnectionOptions(fromDefault(), {
+    callerAsOwner: process.env.NODE_ENV === "development",
+  });
   const connections = createConnectionManager(auth);
   const queries = createQueryClient(connections);
   const http = createFetchClient(auth);
@@ -49,13 +52,12 @@ export async function compositionExample(headers: Headers): Promise<void> {
     await secrets.getString("API_KEY");
   } finally {
     await Promise.all([queries.close(), connections.close(), http.close(), secrets.close()]);
-    await auth.close();
   }
 }
 
 /** Only for an application restricted to read-only SQL and this exact session-state contract. */
 export async function reuseExample(): Promise<void> {
-  const connections = createConnectionManager(undefined, {
+  const connections = createConnectionManager(createConnectionOptions(fromDefault()), {
     pool: {
       mode: "reusable",
       maxConnections: 4,

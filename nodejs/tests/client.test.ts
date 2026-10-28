@@ -19,48 +19,47 @@ import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSarClient, getCallerUserToken, isSarError, SarError } from "../src/index.js";
 import { nextSteps, snowflakeDetails } from "../src/errors.js";
-import {
-  createConnectionOptions,
-  fromCredentials,
-  type AuthProvider,
-  type ConnectionOptionsFactoryOptions,
-} from "../src/auth.js";
+import { createConnectionOptions, type ConnectionOptionsProvider } from "../src/auth.js";
 import { failedQueryError, fakeDriver } from "./fake-driver.js";
 import type { SarClientOptions } from "../src/types.js";
 
-const target = { account: "org-account", accessUrl: "https://org-account.snowflakecomputing.com" };
+const connection = {
+  account: "org-account",
+  accessUrl: "https://org-account.snowflakecomputing.com",
+  authenticator: "OAUTH",
+  token: "test-token",
+};
 function setup(
   fakeOptions: Parameters<typeof fakeDriver>[0] = {},
-  overrides: Pick<SarClientOptions, "pool" | "timeouts" | "results"> &
-    Pick<ConnectionOptionsFactoryOptions, "environment" | "platform" | "callerFallback"> & {
-      providers?: readonly AuthProvider[];
-    } = {},
+  overrides: Pick<SarClientOptions, "pool" | "timeouts" | "results"> & {
+    callerAsOwner?: boolean;
+    connectionOptions?: ConnectionOptionsProvider;
+  } = {},
 ) {
   const fake = fakeDriver(fakeOptions);
-  const { environment, platform, callerFallback, providers, ...execution } = overrides;
+  const { callerAsOwner, connectionOptions, ...execution } = overrides;
   const client = createSarClient({
     driver: fake.driver,
-    connectionOptions: createConnectionOptions(
-      providers ?? [
-        fromCredentials({ target, credential: { type: "oauth", token: "test-token" } }),
-      ],
-      { environment, platform, callerFallback },
-    ),
+    connectionOptions: connectionOptions ?? createConnectionOptions(connection, { callerAsOwner }),
     ...execution,
   });
   return { client, ...fake };
 }
-afterEach(() => vi.unstubAllEnvs());
-
 describe("client ownership", () => {
-  it("does not acquire credentials during construction or diagnostics", async () => {
-    const resolve = vi.fn();
-    const client = createSarClient({
-      connectionOptions: createConnectionOptions([{ id: "test", resolve }]),
+  it("does not read connection options during construction or diagnostics", async () => {
+    const getOwnerOptions = vi.fn();
+    const getCallerOptions = vi.fn();
+    const client = createSarClient({ connectionOptions: { getOwnerOptions, getCallerOptions } });
+    expect(getOwnerOptions).not.toHaveBeenCalled();
+    expect(await client.diagnostics()).toEqual({
+      sessionMode: "isolated",
+      activeConnections: 0,
+      queuedOperations: 0,
+      idleConnections: 0,
+      physicalConnections: 0,
     });
-    expect(resolve).not.toHaveBeenCalled();
-    expect((await client.diagnostics()).providers).toEqual([{ id: "test", state: "unprobed" }]);
-    expect(resolve).not.toHaveBeenCalled();
+    expect(getOwnerOptions).not.toHaveBeenCalled();
+    expect(getCallerOptions).not.toHaveBeenCalled();
     await client.close();
   });
   it("returns structured results with fresh sessions", async () => {
@@ -198,10 +197,7 @@ describe("handles and streams", () => {
       code: "003001",
       sqlState: "42501",
     });
-    const { client } = setup(
-      { status: "RUNNING", cancelError: refusal },
-      { environment: "deployed", platform: "spcs" },
-    );
+    const { client } = setup({ status: "RUNNING", cancelError: refusal });
     const caller = await client.asCaller({ token: "synthetic-caller" }).submit("SELECT 1");
     const callerError = await caller.cancel().catch((error: unknown) => error);
     expect(callerError).toMatchObject({
@@ -395,53 +391,62 @@ describe("caller boundaries", () => {
       "token",
     );
   });
-  it("rejects absent deployed callers without acquiring credentials", async () => {
-    const resolve = vi.fn();
-    const { client } = setup({}, { environment: "deployed", providers: [{ id: "test", resolve }] });
-    await expect(
-      client.asCaller({ headers: new Headers() }).query("SELECT 1"),
-    ).rejects.toMatchObject({ code: "CALLER_CONTEXT_REQUIRED" });
-    expect(resolve).not.toHaveBeenCalled();
+  it("rejects an absent caller token without reading connection options", async () => {
+    const getOwnerOptions = vi.fn();
+    const getCallerOptions = vi.fn();
+    const { client, connections } = setup(
+      {},
+      { connectionOptions: { getOwnerOptions, getCallerOptions } },
+    );
+    expect(() => client.asCaller({ headers: new Headers() })).toThrow(
+      expect.objectContaining({ code: "CALLER_CONTEXT_REQUIRED" }),
+    );
+    expect(getOwnerOptions).not.toHaveBeenCalled();
+    expect(getCallerOptions).not.toHaveBeenCalled();
+    expect(connections).toHaveLength(0);
     await client.close();
   });
-  it("allows local fallback and never exposes secrets on caller views", async () => {
-    const { client } = setup({}, { environment: "local" });
+  it("runs a view without a caller token as the owner only with callerAsOwner", async () => {
+    const { client, connections } = setup({}, { callerAsOwner: true });
     const caller = client.asCaller({ headers: new Headers() });
     expect("secrets" in caller).toBe(false);
     expect("close" in caller).toBe(false);
     await caller.query("SELECT 1");
+    expect(connections[0]?.config.token).toBe("test-token");
     expect(() => client.asCaller({ token: "" })).toThrow();
     await client.close();
   });
-  it.each(["spcs", "serverless"] as const)(
-    "isolates simultaneous callers on %s",
-    async (platform) => {
-      const provider: AuthProvider = {
-        id: "platform-test",
-        async resolve() {
-          return {
-            target,
-            platform,
-            async acquire() {
-              return { type: "oauth", token: "opaque-service" };
-            },
-          };
-        },
-      };
-      const { client, connections } = setup(
-        {},
-        { platform, environment: "deployed", providers: [provider] },
-      );
-      await Promise.all([
-        client.asCaller({ token: "alice" }).query("SELECT 1"),
-        client.asCaller({ token: "bob" }).query("SELECT 1"),
-      ]);
-      expect(connections.map((connection) => connection.config.token).sort()).toEqual(
-        platform === "spcs" ? ["opaque-service.alice", "opaque-service.bob"] : ["alice", "bob"],
-      );
-      await client.close();
-    },
-  );
+  it("never exposes secrets on caller views", async () => {
+    const { client } = setup();
+    const caller = client.asCaller({ token: "alice" });
+    expect("secrets" in caller).toBe(false);
+    expect("close" in caller).toBe(false);
+    expect(() => client.asCaller({ token: "" })).toThrow();
+    await client.close();
+  });
+  it("isolates simultaneous callers", async () => {
+    const { client, connections } = setup();
+    await Promise.all([
+      client.asCaller({ token: "alice" }).query("SELECT 1"),
+      client.asCaller({ token: "bob" }).query("SELECT 1"),
+    ]);
+    expect(connections.map((connection) => connection.config.token).sort()).toEqual([
+      "test-token.alice",
+      "test-token.bob",
+    ]);
+    await client.close();
+  });
+  it("rejects a caller view when the connection has no token to append to", async () => {
+    const { client, connections } = setup(
+      {},
+      { connectionOptions: createConnectionOptions({ account: "org-account", password: "x" }) },
+    );
+    await expect(client.asCaller({ token: "alice" }).query("SELECT 1")).rejects.toMatchObject({
+      code: "AUTH_NOT_SUPPORTED",
+    });
+    expect(connections).toHaveLength(0);
+    await client.close();
+  });
 });
 
 describe("caller-scoped withConnection", () => {
@@ -449,25 +454,9 @@ describe("caller-scoped withConnection", () => {
     "withConnection takes only a callback; use asCaller({ headers }).withConnection(callback) for caller identity";
   const untyped = (target: object) =>
     target as { withConnection(...args: unknown[]): Promise<unknown> };
-  it.each(["spcs", "serverless"] as const)(
-    "rejects caller options and runs caller-view callbacks without changing owner identity on %s",
-    async (platform) => {
-      const provider: AuthProvider = {
-        id: "platform-test",
-        async resolve() {
-          return {
-            target,
-            platform,
-            async acquire() {
-              return { type: "oauth", token: "opaque-service" };
-            },
-          };
-        },
-      };
-      const { client, connections } = setup(
-        {},
-        { platform, environment: "deployed", providers: [provider] },
-      );
+  it("rejects caller options and runs caller-view callbacks without changing owner identity", async () => {
+    {
+      const { client, connections } = setup();
       const headers = new Headers({ "sf-context-current-user-token": "alice" });
       const callback = vi.fn(async () => ({ value: 42 }));
       await expect(
@@ -484,18 +473,18 @@ describe("caller-scoped withConnection", () => {
       );
       await client.withConnection(async () => undefined);
       expect(connections.map((connection) => connection.config.token)).toEqual([
-        platform === "spcs" ? "opaque-service.alice" : "alice",
-        "opaque-service",
+        "test-token.alice",
+        "test-token",
       ]);
       for (const connection of connections) expect(connection.execute).not.toHaveBeenCalled();
       expect(connections.map((connection) => connection.destroy.mock.calls.length)).toEqual([0, 1]);
       expect((await client.diagnostics()).activeConnections).toBe(0);
       await client.close();
       for (const connection of connections) expect(connection.destroy).toHaveBeenCalledOnce();
-    },
-  );
+    }
+  });
   it("isolates overlapping owner and caller callbacks", async () => {
-    const { client, connections } = setup({}, { environment: "deployed", platform: "spcs" });
+    const { client, connections } = setup();
     let finishCallbacks!: () => void;
     const callbackGate = new Promise<void>((resolve) => {
       finishCallbacks = resolve;
@@ -530,10 +519,7 @@ describe("caller-scoped withConnection", () => {
     expect(loggedOut()).toEqual({ "test-token": 1, "test-token.alice": 1, "test-token.bob": 1 });
   });
   it("shares the parent budget and retains a connection until the callback settles", async () => {
-    const { client, connections } = setup(
-      {},
-      { environment: "deployed", platform: "spcs", pool: { maxConnections: 1, maxQueue: 1 } },
-    );
+    const { client, connections } = setup({}, { pool: { maxConnections: 1, maxQueue: 1 } });
     let finishCallback!: () => void;
     const callbackGate = new Promise<void>((resolve) => {
       finishCallback = resolve;
@@ -559,7 +545,7 @@ describe("caller-scoped withConnection", () => {
     expect(connections[1]?.destroy).toHaveBeenCalledOnce();
   });
   it("releases a caller connection when the callback throws", async () => {
-    const { client, connections } = setup({}, { platform: "spcs", environment: "deployed" });
+    const { client, connections } = setup();
     await expect(
       client
         .asCaller({ headers: new Headers({ "sf-context-current-user-token": "alice" }) })
@@ -575,56 +561,47 @@ describe("caller-scoped withConnection", () => {
     await client.close();
     expect(connections[0]?.destroy).toHaveBeenCalledOnce();
   });
-  it.each(["local", "preview"] as const)(
-    "retains missing-caller fallback in %s",
-    async (environment) => {
-      const { client, connections } = setup({}, { environment });
-      await client.asCaller({ headers: new Headers() }).withConnection(async () => undefined);
-      expect(connections[0]?.config.token).toBe("test-token");
-      expect(connections[0]?.destroy).toHaveBeenCalledOnce();
-      await client.close();
-    },
-  );
-  it.each([
-    { environment: "deployed" as const },
-    { environment: "local" as const, callerFallback: "error" as const },
-  ])("rejects missing caller context before credential resolution: %o", async (settings) => {
-    const resolve = vi.fn();
+  it("runs a view without a caller token as the owner with callerAsOwner", async () => {
+    const { client, connections } = setup({}, { callerAsOwner: true });
+    await client.asCaller({ headers: new Headers() }).withConnection(async () => undefined);
+    expect(connections[0]?.config.token).toBe("test-token");
+    expect(connections[0]?.destroy).toHaveBeenCalledOnce();
+    await client.close();
+  });
+  it("rejects missing caller context before reading options or running the callback", async () => {
+    const getOwnerOptions = vi.fn();
+    const getCallerOptions = vi.fn();
     const { client, connections } = setup(
       {},
-      {
-        environment: settings.environment,
-        providers: [{ id: "test", resolve }],
-        callerFallback: settings.callerFallback,
-      },
+      { connectionOptions: { getOwnerOptions, getCallerOptions } },
     );
     const callback = vi.fn();
-    await expect(
-      client.asCaller({ headers: new Headers() }).withConnection(callback),
-    ).rejects.toMatchObject({ code: "CALLER_CONTEXT_REQUIRED" });
-    expect(resolve).not.toHaveBeenCalled();
+    expect(() => client.asCaller({ headers: new Headers() }).withConnection(callback)).toThrow(
+      expect.objectContaining({ code: "CALLER_CONTEXT_REQUIRED" }),
+    );
+    expect(getOwnerOptions).not.toHaveBeenCalled();
+    expect(getCallerOptions).not.toHaveBeenCalled();
     expect(callback).not.toHaveBeenCalled();
     expect(connections).toHaveLength(0);
     await client.close();
   });
-  it("does not fall back or invoke the callback after credential acquisition fails", async () => {
-    const acquire = vi.fn(async () => {
+  it("does not fall back or invoke the callback after caller options fail", async () => {
+    const getCallerOptions = vi.fn(() => {
       throw new Error("credential rejected");
     });
-    const provider: AuthProvider = {
-      id: "test",
-      async resolve() {
-        return { target, platform: "spcs", acquire };
-      },
-    };
-    const { client, connections } = setup({}, { environment: "local", providers: [provider] });
+    const getOwnerOptions = vi.fn(() => ({ ...connection }));
+    const { client, connections } = setup(
+      {},
+      { connectionOptions: { getOwnerOptions, getCallerOptions } },
+    );
     const callback = vi.fn();
     await expect(
       client
         .asCaller({ headers: new Headers({ "sf-context-current-user-token": "alice" }) })
         .withConnection(callback),
     ).rejects.toMatchObject({ code: "AUTH_FAILED" });
-    expect(acquire).toHaveBeenCalledOnce();
+    expect(getCallerOptions).toHaveBeenCalledOnce();
+    expect(getOwnerOptions).not.toHaveBeenCalled();
     expect(callback).not.toHaveBeenCalled();
     expect(connections).toHaveLength(0);
     await client.close();
@@ -632,7 +609,7 @@ describe("caller-scoped withConnection", () => {
   it.each([{}, { asCaller: false }] as const)(
     "rejects owner options and runs the bare callback as owner: %o",
     async (options) => {
-      const { client, connections } = setup({}, { environment: "deployed" });
+      const { client, connections } = setup();
       const callback = vi.fn(async () => 42);
       await expect(untyped(client).withConnection(options, callback)).rejects.toMatchObject({
         code: "INVALID_OPTIONS",
@@ -689,7 +666,7 @@ describe("caller-scoped withConnection", () => {
     },
   );
   it("rejects options after the callback instead of running it as owner", async () => {
-    const { client, connections } = setup({}, { environment: "deployed", platform: "spcs" });
+    const { client, connections } = setup();
     const callback = vi.fn(async () => "owner");
     const headers = new Headers({ "sf-context-current-user-token": "alice" });
     for (const extra of [{ asCaller: true, headers }, {}, async () => undefined])
@@ -710,9 +687,7 @@ describe("caller-scoped withConnection", () => {
       code: "INVALID_OPTIONS",
       message: callbackOnly,
     });
-    await expect(
-      client.asCaller({ headers: new Headers() }).withConnection(missing),
-    ).rejects.toMatchObject({
+    await expect(client.asCaller({ token: "bob" }).withConnection(missing)).rejects.toMatchObject({
       code: "INVALID_OPTIONS",
       message: "withConnection requires a callback",
     });
@@ -725,9 +700,9 @@ describe("caller-scoped withConnection", () => {
   });
   it("rejects new caller connections after parent shutdown", async () => {
     const { client, connections } = setup();
-    const caller = client.asCaller({ headers: new Headers() });
+    const caller = client.asCaller({ token: "alice" });
     await client.close();
-    expect(() => client.asCaller({ headers: new Headers() })).toThrow(
+    expect(() => client.asCaller({ token: "bob" })).toThrow(
       expect.objectContaining({ code: "CLIENT_CLOSED" }),
     );
     await expect(caller.withConnection(async () => undefined)).rejects.toMatchObject({
@@ -741,7 +716,7 @@ describe("caller session logout", () => {
   afterEach(() => vi.useRealTimers());
   function callerSetup(fakeOptions: Parameters<typeof fakeDriver>[0] = {}) {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const fake = setup(fakeOptions, { environment: "deployed", platform: "spcs" });
+    const fake = setup(fakeOptions);
     const view = (user: string) =>
       fake.client.asCaller({ headers: new Headers({ "sf-context-current-user-token": user }) });
     const loggedOut = () =>
@@ -820,7 +795,7 @@ describe("caller session logout", () => {
     await client.close();
   });
   it("logs out immediately without a caller token", async () => {
-    const { client, connections } = setup({}, { environment: "local" });
+    const { client, connections } = setup({}, { callerAsOwner: true });
     await client.asCaller({ headers: new Headers() }).withConnection(async () => {});
     expect(connections[0]?.config.token).toBe("test-token");
     expect(connections[0]?.destroy).toHaveBeenCalledOnce();
@@ -930,9 +905,15 @@ describe("query status polling", () => {
 
 describe("public validation", () => {
   it("rejects unknown options and driver identity overrides", () => {
-    expect(() =>
-      createSarClient({ driverOptions: { token: "bad" } } as unknown as SarClientOptions),
-    ).toThrow();
+    for (const removed of [
+      { driverOptions: { token: "bad" } },
+      { connection: { account: "x" } },
+      { environment: "local" },
+      { platform: "spcs" },
+      { callerFallback: "error" },
+      { timeouts: { authMs: 1 } },
+    ])
+      expect(() => createSarClient(removed as unknown as SarClientOptions)).toThrow();
     expect(() => createSarClient({ pool: { maxConnections: 0 } })).toThrow();
     expect(() =>
       createSarClient({ results: { format: "wrong" } } as unknown as SarClientOptions),

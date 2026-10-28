@@ -19,7 +19,7 @@ import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import type snowflake from "snowflake-sdk";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions, fromCredentials } from "../src/auth.js";
+import { createConnectionOptions } from "../src/auth.js";
 import { fakeDriver } from "./fake-driver.js";
 
 function setup(fakeOptions: Parameters<typeof fakeDriver>[0] = {}) {
@@ -28,12 +28,12 @@ function setup(fakeOptions: Parameters<typeof fakeDriver>[0] = {}) {
     ...fake,
     client: createSarClient({
       driver: fake.driver,
-      connectionOptions: createConnectionOptions([
-        fromCredentials({
-          target: { account: "test" },
-          credential: { type: "oauth", token: "synthetic" },
-        }),
-      ]),
+      connectionOptions: createConnectionOptions({
+        account: "test",
+        accessUrl: "https://test.snowflakecomputing.com",
+        authenticator: "OAUTH",
+        token: "synthetic",
+      }),
     }),
   };
 }
@@ -139,12 +139,12 @@ describe("synchronous query() and stream()", () => {
     };
     const client = createSarClient({
       driver: fake.driver,
-      connectionOptions: createConnectionOptions([
-        fromCredentials({
-          target: { account: "test" },
-          credential: { type: "oauth", token: "synthetic" },
-        }),
-      ]),
+      connectionOptions: createConnectionOptions({
+        account: "test",
+        accessUrl: "https://test.snowflakecomputing.com",
+        authenticator: "OAUTH",
+        token: "synthetic",
+      }),
     });
     await expect(client.query("SELECT ?", { binds: [1] })).rejects.toMatchObject({
       code: "QUERY_FAILED",

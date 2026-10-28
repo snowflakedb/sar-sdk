@@ -25,7 +25,7 @@ open a browser, read real credentials, or call the account APIs.
 
 - `query.ts`: named local profile, binds, cancellation, safe errors, and shutdown.
 - `caller.ts`: request-scoped caller views and one-off raw caller connections.
-- `operations.ts`: token-file provider, handles, transactions, streams, and HTTP response ownership.
+- `operations.ts`: explicit connection options from a rotating token getter, handles, transactions, streams, and HTTP response ownership.
 - `detached-http.ts`: submit/poll/download/cancel handlers with an injected durable shared store,
   application authorization, job admission, expiry, and a versioned decoder. Each request
   selects a fresh caller view. Submit persists the reference and returns HTTP 202 with a

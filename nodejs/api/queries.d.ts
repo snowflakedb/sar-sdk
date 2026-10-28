@@ -1,32 +1,11 @@
 import snowflake from 'snowflake-sdk';
 
-interface Detected {
-    environment: "local" | "preview" | "deployed" | "unknown";
-    platform: "serverless" | "spcs" | "unknown";
-    evidence: string[];
-}
-
 type NativeConnectionOptions = snowflake.ConnectionOptions;
-interface AcquireOptions {
-    signal?: AbortSignal;
-    timeoutMs?: number;
-}
-interface ConnectionOptionsDiagnostics extends Detected {
-    connectionName?: string;
-    endpoint?: string;
-    /** Sorted names, never values, of selected-profile keys the SDK doesn't use. */
-    ignoredProfileKeys?: string[];
-    providers: {
-        id: string;
-        state: "unprobed" | "selected";
-    }[];
-}
 /** Trusted application dependency. Returned native options contain credentials. */
 interface ConnectionOptionsProvider {
-    getOwnerOptions(options?: AcquireOptions): Promise<NativeConnectionOptions>;
-    getCallerOptions(context: CallerContext, options?: AcquireOptions): Promise<NativeConnectionOptions>;
-    /** Must be redacted and must not authenticate or acquire credentials. */
-    diagnostics?(): Promise<ConnectionOptionsDiagnostics>;
+    getOwnerOptions(): NativeConnectionOptions;
+    /** The caller's token, taken from the sf-context-current-user-token header. */
+    getCallerOptions(token: string): NativeConnectionOptions;
 }
 
 /** Node driver bind values, passed through without SQL interpolation. */
@@ -34,23 +13,6 @@ type Binds = snowflake.Binds;
 /** Compatible injected driver. No module-global configure calls are made. */
 interface DriverModule {
     createConnection(options: snowflake.ConnectionOptions): snowflake.Connection;
-}
-/** Trusted deployment classification, never supplied from request headers. */
-type Environment = "auto" | "local" | "preview" | "deployed";
-/** Platform-specific caller authentication protocol. */
-type Platform = "auto" | "spcs" | "serverless";
-/** Account/profile selection and default SQL context. */
-interface ConnectionOptions {
-    name?: string;
-    configFile?: string;
-    account?: string;
-    host?: string;
-    accessUrl?: string;
-    username?: string;
-    warehouse?: string;
-    database?: string;
-    schema?: string;
-    role?: string;
 }
 /** Default materialization limits apply during row consumption, not afterward. */
 interface ResultOptions {
@@ -262,8 +224,6 @@ interface LogEvent {
     queryId?: string;
     /** The SDK error code. */
     code?: string;
-    environment?: string;
-    keys?: string[];
     /** Whole milliseconds, including session acquisition. */
     durationMs?: number;
     /** Returned rows, as in QueryResult. */
@@ -272,19 +232,7 @@ interface LogEvent {
     errorCode?: string;
     mode?: "owner" | "caller";
 }
-/** Configuration sources are unprobed until an actual operation selects one. */
 interface ClientDiagnostics {
-    environment: Exclude<Environment, "auto"> | "unknown";
-    platform: Exclude<Platform, "auto"> | "unknown";
-    evidence: string[];
-    connectionName?: string;
-    endpoint?: string;
-    /** Sorted names, never values, of selected-profile keys the SDK doesn't use. */
-    ignoredProfileKeys?: string[];
-    providers: {
-        id: string;
-        state: "unprobed" | "selected";
-    }[];
     sessionMode: "isolated" | "reusable";
     activeConnections: number;
     queuedOperations: number;
@@ -338,14 +286,15 @@ type FetchInit = RequestInit & {
     /** Deadline for this request, including reading its body. Overrides `timeouts.httpMs`. */
     timeoutMs?: number;
 };
-/**
- * Options are checked at runtime for JavaScript callers as well. Without connectionOptions, the
- * client creates and closes an options factory from the connection settings and timeouts.authMs.
- */
+/** Options are checked at runtime for JavaScript callers as well. */
 type SarClientOptions = {
+    /**
+     * Borrowed native-options provider from createConnectionOptions; configure it with explicit
+     * connection options. Without it, work that needs a Snowflake connection fails.
+     */
+    connectionOptions?: ConnectionOptionsProvider;
     pool?: PoolOptions;
     timeouts?: {
-        authMs?: number;
         waitMs?: number;
         consumeMs?: number;
         closeMs?: number;
@@ -359,40 +308,8 @@ type SarClientOptions = {
         providers?: readonly SecretProvider[];
     };
     driver?: DriverModule;
-} & ({
-    connectionOptions?: undefined;
-    connection?: ConnectionOptions;
-    environment?: Environment;
-    platform?: Platform;
-    /** Interactive login needs local execution; "always" permits it without a terminal. */
-    interactive?: "auto" | "always" | "never";
-    /**
-     * When caller context is missing, use owner credentials in local or preview execution
-     * ("auto") or never ("error").
-     */
-    callerFallback?: "auto" | "error";
-    /**
-     * Run caller views as the owner, even when caller context is present. The SDK doesn't
-     * detect when: pass the app's own condition, such as
-     * `process.env.NODE_ENV === "development"`. Default: false.
-     */
-    callerAsOwner?: boolean;
-    driverOptions?: DriverOptions;
     logger?: (event: LogEvent) => void;
-} | {
-    /** Borrowed native-options provider; configure it and close it after its consumers. */
-    connectionOptions: ConnectionOptionsProvider;
-    connection?: never;
-    environment?: never;
-    platform?: never;
-    interactive?: never;
-    callerFallback?: never;
-    callerAsOwner?: never;
-    driverOptions?: never;
-    logger?: never;
-});
-/** Safe driver tuning; authentication and owned-session flags are not overrides. */
-type DriverOptions = Pick<snowflake.ConnectionOptions, "clientStoreTemporaryCredential" | "credentialCacheDir" | "clientRequestMFAToken" | "browserActionTimeout" | "openExternalBrowserCallback" | "proxyHost" | "proxyPort" | "proxyProtocol" | "proxyUser" | "proxyPassword" | "noProxy">;
+};
 /** Caller views cannot read app secrets or close the parent client. */
 interface CallerClient extends DetachedQueryScope {
     query<Row = Record<string, unknown>>(sql: string, options?: QueryOptions): Promise<QueryResult<Row>>;

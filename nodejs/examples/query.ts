@@ -20,8 +20,9 @@ import { createConnectionOptions, fromToml } from "@snowflake/sar-sdk/auth";
 
 // Call explicitly in your server/script. Importing this example performs no work.
 export async function queryExample(): Promise<void> {
-  const options = createConnectionOptions(fromToml({ name: "dev" }));
-  const client = createSarClient({ connectionOptions: options });
+  const client = createSarClient({
+    connectionOptions: createConnectionOptions(fromToml({ name: "dev" })),
+  });
   try {
     const result = await client.query<{ MESSAGE: string }>("SELECT ?::VARCHAR AS MESSAGE", {
       binds: ["Hello from SAR"],
@@ -33,6 +34,5 @@ export async function queryExample(): Promise<void> {
     else throw error;
   } finally {
     await client.close();
-    await options.close();
   }
 }

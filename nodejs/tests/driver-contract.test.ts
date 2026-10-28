@@ -19,7 +19,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions, fromCredentials } from "../src/auth.js";
+import { createConnectionOptions } from "../src/auth.js";
 import { connect } from "../src/driver-adapter.js";
 import { convertRow, metadata } from "../src/results.js";
 import { fakeDriver } from "./fake-driver.js";
@@ -36,15 +36,12 @@ function clientFor(options: Parameters<typeof fakeDriver>[0] = {}) {
     ...fake,
     client: createSarClient({
       driver: fake.driver,
-      connectionOptions: createConnectionOptions(
-        [
-          fromCredentials({
-            target: { account: "test" },
-            credential: { type: "oauth", token: "synthetic" },
-          }),
-        ],
-        { environment: "local" },
-      ),
+      connectionOptions: createConnectionOptions({
+        account: "test",
+        accessUrl: "https://test.snowflakecomputing.com",
+        authenticator: "OAUTH",
+        token: "synthetic",
+      }),
     }),
   };
 }

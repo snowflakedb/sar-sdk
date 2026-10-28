@@ -19,7 +19,7 @@ import { Readable } from "node:stream";
 import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions, fromCredentials } from "../src/auth.js";
+import { createConnectionOptions } from "../src/auth.js";
 import { nextSteps, SarError } from "../src/errors.js";
 import { createConnectionManager } from "../src/connections.js";
 import { createQueryClient, type DetachedQueryScope } from "../src/queries.js";
@@ -33,8 +33,8 @@ afterEach(() => {
 function setup() {
   const service = fakeQueryService();
   let token = "synthetic-first";
-  const owner = vi.fn(async () => ({ account: "test", authenticator: "OAUTH", token }));
-  const caller = vi.fn(async () => ({
+  const owner = vi.fn(() => ({ account: "test", authenticator: "OAUTH", token }));
+  const caller = vi.fn(() => ({
     account: "test",
     authenticator: "OAUTH",
     token: `caller-${token}`,
@@ -169,13 +169,15 @@ describe("cross-instance query retrieval", () => {
     await expect(client.pollQuery(reference)).rejects.toMatchObject({
       code: "QUERY_IDENTITY_MISMATCH",
     });
-    await expect(
-      client.asCaller({ headers: new Headers() }).pollQuery(reference),
-    ).rejects.toMatchObject({ code: "CALLER_CONTEXT_REQUIRED" });
+    expect(() => client.asCaller({ headers: new Headers() })).toThrow(
+      expect.objectContaining({ code: "CALLER_CONTEXT_REQUIRED" }),
+    );
     rotate();
     settings.status = "SUCCESS";
     await client.asCaller({ token: "second" }).getQueryStatus(reference);
-    caller.mockRejectedValueOnce(new SarError("AUTH_FAILED", "Synthetic rejection"));
+    caller.mockImplementationOnce(() => {
+      throw new SarError("AUTH_FAILED", "Synthetic rejection");
+    });
     await expect(client.asCaller({ token: "third" }).pollQuery(reference)).rejects.toMatchObject({
       code: "AUTH_FAILED",
       details: { queryId: reference.queryId, completion: "unknown" },
@@ -184,21 +186,19 @@ describe("cross-instance query retrieval", () => {
     expect(owner).not.toHaveBeenCalled();
     await client.close();
   });
-  it("does not use local/preview fallback for detached caller submissions", async () => {
+  it("rejects a detached caller submission without a caller token", async () => {
     const fake = fakeQueryService();
     const client = createSarClient({
       driver: fake.driver,
-      connectionOptions: createConnectionOptions(
-        fromCredentials({
-          target: { account: "test" },
-          credential: { type: "oauth", token: "synthetic" },
-        }),
-        { environment: "local" },
-      ),
+      connectionOptions: createConnectionOptions({
+        account: "test",
+        authenticator: "OAUTH",
+        token: "synthetic",
+      }),
     });
-    await expect(
-      client.asCaller({ headers: new Headers() }).submitDetached("synthetic"),
-    ).rejects.toMatchObject({ code: "CALLER_CONTEXT_REQUIRED" });
+    expect(() => client.asCaller({ headers: new Headers() })).toThrow(
+      expect.objectContaining({ code: "CALLER_CONTEXT_REQUIRED" }),
+    );
     expect(fake.connections).toHaveLength(0);
     await client.close();
   });

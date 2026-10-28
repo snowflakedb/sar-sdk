@@ -40,23 +40,12 @@ afterEach(() => {
   fetchMock.mockClear();
 });
 function authOptions() {
-  return createConnectionOptions(
-    [
-      {
-        id: "test",
-        async resolve() {
-          return {
-            target: { account: "test" },
-            platform: "spcs",
-            async acquire() {
-              return { type: "oauth", token: "synthetic-owner" };
-            },
-          };
-        },
-      },
-    ],
-    { environment: "deployed", platform: "spcs" },
-  );
+  return createConnectionOptions({
+    account: "test",
+    accessUrl: "https://test.snowflakecomputing.com",
+    authenticator: "OAUTH",
+    token: "synthetic-owner",
+  });
 }
 function deferred() {
   let resolve!: () => void;
@@ -67,78 +56,16 @@ function deferred() {
 }
 
 describe("independent authentication", () => {
-  it("allows an explicit credential deadline to override the default", async () => {
-    vi.useFakeTimers();
-    const gate = deferred();
-    const auth = createConnectionOptions(
-      [
-        {
-          id: "test",
-          async resolve() {
-            return {
-              target: { account: "test" },
-              async acquire() {
-                await gate.promise;
-                return { type: "oauth", token: "synthetic" };
-              },
-            };
-          },
-        },
-      ],
-      { authTimeoutMs: 5 },
-    );
-    try {
-      const pending = auth.getOwnerOptions({ timeoutMs: 50 });
-      await vi.advanceTimersByTimeAsync(10);
-      gate.resolve();
-      await expect(pending).resolves.toHaveProperty("token");
-    } finally {
-      await auth.close();
-      vi.useRealTimers();
-    }
-  });
-  it("resolves detached credentials repeatedly without SQL and isolates caller scopes", async () => {
+  it("reads detached options repeatedly without SQL and isolates caller scopes", () => {
     const auth = authOptions();
-    expect((await auth.diagnostics()).providers[0]?.state).toBe("unprobed");
-    const context = {
-      headers: new Headers({ "sf-context-current-user-token": "synthetic-caller" }),
-    };
-    const owner = await auth.getOwnerOptions();
+    const owner = auth.getOwnerOptions();
     expect(owner).toMatchObject({ authenticator: "OAUTH", token: "synthetic-owner" });
-    expect(await auth.getCallerOptions(context)).toMatchObject({
+    expect(auth.getCallerOptions("synthetic-caller")).toMatchObject({
       authenticator: "OAUTH",
       token: "synthetic-owner.synthetic-caller",
     });
-    expect((await auth.diagnostics()).providers[0]?.state).toBe("selected");
-    await auth.close();
-    await expect(auth.getOwnerOptions()).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
-    await expect(auth.getCallerOptions(context)).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
-  });
-  it("rejects pre-aborted acquisition without probing sources", async () => {
-    const resolve = vi.fn();
-    const auth = createConnectionOptions([{ id: "test", resolve }]);
-    await expect(auth.getOwnerOptions({ signal: AbortSignal.abort() })).rejects.toMatchObject({
-      code: "ABORTED",
-    });
-    expect(resolve).not.toHaveBeenCalled();
-    await auth.close();
-  });
-  it("aborts credential waits on close", async () => {
-    const gate = deferred();
-    const auth = createConnectionOptions([
-      {
-        id: "test",
-        async resolve() {
-          await gate.promise;
-          return undefined;
-        },
-      },
-    ]);
-    const pending = auth.getOwnerOptions();
-    const rejected = expect(pending).rejects.toMatchObject({ code: "ABORTED" });
-    await auth.close();
-    await rejected;
-    gate.resolve();
+    expect(auth.getOwnerOptions()).toMatchObject({ token: "synthetic-owner" });
+    expect(auth.getOwnerOptions()).not.toBe(owner);
   });
   it("rejects invalid resolvers and conflicting configuration", () => {
     const auth = authOptions();
@@ -164,8 +91,7 @@ describe("component ownership", () => {
             : createSarClient(input);
       input.connectionOptions = undefined;
       await client.close();
-      await expect(auth.getOwnerOptions()).resolves.toHaveProperty("token");
-      await auth.close();
+      expect(auth.getOwnerOptions()).toHaveProperty("token");
     },
   );
   it("HTTP and secrets work without a driver or SQL-capable client", async () => {
@@ -189,20 +115,15 @@ describe("component ownership", () => {
       "Bearer synthetic-owner.synthetic-caller",
     );
     await Promise.all([http.close(), secrets.close()]);
-    expect((await auth.getOwnerOptions()).authenticator).toBe("OAUTH");
+    expect(auth.getOwnerOptions().authenticator).toBe("OAUTH");
     await expect(caller.fetch("/api/v2/test")).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
     await expect(secrets.getString("KEY")).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
     expect(() => http.asCaller({ token: "test" })).toThrow();
-    await auth.close();
   });
-  it("standalone fetch owns its resolver and has idempotent shutdown", async () => {
-    vi.stubEnv("SNOWFLAKE_ACCOUNT", "test");
-    vi.stubEnv("SNOWFLAKE_AUTHENTICATOR", "oauth");
-    vi.stubEnv("SNOWFLAKE_TOKEN", "synthetic");
-    vi.stubEnv("SNOWFLAKE_CONNECTION_NAME", undefined);
-    vi.stubEnv("SNOWFLAKE_DEFAULT_CONNECTION_NAME", undefined);
+  it("standalone fetch without connection options fails and has idempotent shutdown", async () => {
     const http = createFetchClient();
-    expect(await (await http.fetch("/api/v2/test")).text()).toBe("ok");
+    await expect(http.fetch("/api/v2/test")).rejects.toMatchObject({ code: "AUTH_NOT_FOUND" });
+    expect(fetchMock).not.toHaveBeenCalled();
     const closing = http.close();
     expect(http.close()).toBe(closing);
     await closing;
@@ -300,8 +221,7 @@ describe("component ownership", () => {
       "Bearer synthetic-owner.synthetic-first",
     );
     await client.close();
-    await auth.getOwnerOptions();
-    await auth.close();
+    auth.getOwnerOptions();
   });
   it("rejects invalid query scopes and non-Promise native callbacks", async () => {
     expect(() => createQueryClient({} as never)).toThrow();

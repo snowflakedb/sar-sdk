@@ -265,10 +265,10 @@ describe("shared-record HTTP example", () => {
     const client = createSarClient({
       driver: service.driver,
       connectionOptions: {
-        async getOwnerOptions() {
+        getOwnerOptions() {
           return { account: "test", authenticator: "OAUTH", token: "synthetic" };
         },
-        async getCallerOptions() {
+        getCallerOptions() {
           throw new Error("This fixture uses owner mode");
         },
       },
@@ -339,10 +339,10 @@ describe("shared-record HTTP example", () => {
       const client = createSarClient({
         driver: service.driver,
         connectionOptions: {
-          async getOwnerOptions() {
+          getOwnerOptions() {
             return { account: "test", authenticator: "OAUTH", token: "synthetic" };
           },
-          async getCallerOptions() {
+          getCallerOptions() {
             throw new Error("This fixture uses owner mode");
           },
         },
@@ -402,10 +402,10 @@ describe("shared-record HTTP example", () => {
       const client = createSarClient({
         driver: service.driver,
         connectionOptions: {
-          async getOwnerOptions() {
+          getOwnerOptions() {
             return { account: "test", authenticator: "OAUTH", token: "synthetic" };
           },
-          async getCallerOptions() {
+          getCallerOptions() {
             throw new Error("This fixture uses owner mode");
           },
         },

@@ -17,7 +17,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions, fromCredentials, type AuthProvider } from "../src/auth.js";
+import { createConnectionOptions } from "../src/auth.js";
 import { HttpTransport } from "../src/http.js";
 import { fakeDriver } from "./fake-driver.js";
 
@@ -41,12 +41,11 @@ describe("flat authenticated fetch API", () => {
       const fake = fakeDriver();
       const client = createSarClient({
         driver: fake.driver,
-        connectionOptions: createConnectionOptions([
-          fromCredentials({
-            target: { account: "test" },
-            credential: { type, token: "synthetic-app" },
-          }),
-        ]),
+        connectionOptions: createConnectionOptions({
+          account: "test",
+          authenticator: type === "oauth" ? "OAUTH" : "PROGRAMMATIC_ACCESS_TOKEN",
+          token: "synthetic-app",
+        }),
       });
       try {
         const headers = new Headers({ "x-request-id": "synthetic" });
@@ -77,28 +76,16 @@ describe("flat authenticated fetch API", () => {
     },
   );
 
-  it.each(["spcs", "serverless"] as const)(
-    "keeps overlapping caller and owner fetches isolated on %s",
-    async (platform) => {
+  it("keeps overlapping caller and owner fetches isolated", async () => {
+    {
       const transport = vi
         .spyOn(HttpTransport.prototype, "fetch")
         .mockImplementation(async () => new Response(null, { status: 204 }));
-      const provider: AuthProvider = {
-        id: "synthetic",
-        async resolve() {
-          return {
-            target: { account: "test" },
-            platform,
-            async acquire() {
-              return { type: "oauth", token: "synthetic-app" };
-            },
-          };
-        },
-      };
       const client = createSarClient({
-        connectionOptions: createConnectionOptions([provider], {
-          environment: "deployed",
-          platform,
+        connectionOptions: createConnectionOptions({
+          account: "test",
+          authenticator: "OAUTH",
+          token: "synthetic-app",
         }),
       });
       const first = client.asCaller({ headers: { get: () => "synthetic-first" } });
@@ -112,8 +99,8 @@ describe("flat authenticated fetch API", () => {
           ]),
         );
         expect(headersByPath).toEqual({
-          "/first": `Bearer ${platform === "spcs" ? "synthetic-app." : ""}synthetic-first`,
-          "/second": `Bearer ${platform === "spcs" ? "synthetic-app." : ""}synthetic-second`,
+          "/first": "Bearer synthetic-app.synthetic-first",
+          "/second": "Bearer synthetic-app.synthetic-second",
           "/owner": "Bearer synthetic-app",
         });
         expect(first).not.toHaveProperty("rest");
@@ -127,18 +114,17 @@ describe("flat authenticated fetch API", () => {
       } finally {
         await client.close();
       }
-    },
-  );
+    }
+  });
 
   it("rejects a credential without account HTTP support before transport", async () => {
     const transport = vi.spyOn(HttpTransport.prototype, "fetch");
     const client = createSarClient({
-      connectionOptions: createConnectionOptions([
-        fromCredentials({
-          target: { account: "test", username: "synthetic" },
-          credential: { type: "password", username: "synthetic", password: "synthetic" },
-        }),
-      ]),
+      connectionOptions: createConnectionOptions({
+        account: "test",
+        username: "synthetic",
+        password: "synthetic",
+      }),
     });
     try {
       await expect(client.fetch("/api/v2/test")).rejects.toMatchObject({
@@ -150,19 +136,36 @@ describe("flat authenticated fetch API", () => {
     }
   });
 
-  it("rejects missing deployed caller context before provider discovery", async () => {
-    const resolve = vi.fn();
+  it("rejects missing caller context before reading options", async () => {
+    const getOwnerOptions = vi.fn();
+    const getCallerOptions = vi.fn();
+    const client = createSarClient({ connectionOptions: { getOwnerOptions, getCallerOptions } });
+    try {
+      expect(() => client.asCaller({ headers: new Headers() })).toThrowError(
+        expect.objectContaining({ code: "CALLER_CONTEXT_REQUIRED" }),
+      );
+      expect(getOwnerOptions).not.toHaveBeenCalled();
+      expect(getCallerOptions).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("fetches as the owner for a view without a caller token when callerAsOwner is set", async () => {
+    const transport = vi
+      .spyOn(HttpTransport.prototype, "fetch")
+      .mockImplementation(async () => new Response(null, { status: 204 }));
     const client = createSarClient({
-      connectionOptions: createConnectionOptions([{ id: "synthetic", resolve }], {
-        environment: "deployed",
-      }),
+      connectionOptions: createConnectionOptions(
+        { account: "test", authenticator: "OAUTH", token: "synthetic-app" },
+        { callerAsOwner: true },
+      ),
     });
     try {
-      const caller = client.asCaller({ headers: new Headers() });
-      await expect(caller.fetch("/api/v2/test")).rejects.toMatchObject({
-        code: "CALLER_CONTEXT_REQUIRED",
-      });
-      expect(resolve).not.toHaveBeenCalled();
+      await client.asCaller({ headers: new Headers() }).fetch("/api/v2/test");
+      expect(new Headers(transport.mock.calls[0]![1]?.headers).get("authorization")).toBe(
+        "Bearer synthetic-app",
+      );
     } finally {
       await client.close();
     }

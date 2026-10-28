@@ -17,258 +17,127 @@
 
 import { createHash } from "node:crypto";
 import type snowflake from "snowflake-sdk";
-import { AuthManager, credentialOptions, type AuthProvider } from "./auth-manager.js";
 import { callerToken } from "./caller.js";
-import { detect, endpoint, selectedName, type Detected } from "./config.js";
-import { duration, fail, keys, signalOption } from "./errors.js";
-import { checkAbort, deadline } from "./lifecycle.js";
-import { internalOptions } from "./options.js";
-import type {
-  CallerContext,
-  ConnectionOptions,
-  DriverOptions,
-  Environment,
-  LogEvent,
-  Platform,
-} from "./types.js";
+import { endpoint } from "./config.js";
+import { fail, keys, nextSteps, SarError } from "./errors.js";
+import type { CallerContext } from "./types.js";
 
 export type NativeConnectionOptions = snowflake.ConnectionOptions;
-export interface AcquireOptions {
-  signal?: AbortSignal;
-  timeoutMs?: number;
-}
-export interface ConnectionOptionsDiagnostics extends Detected {
-  connectionName?: string;
-  endpoint?: string;
-  /** Sorted names, never values, of selected-profile keys the SDK doesn't use. */
-  ignoredProfileKeys?: string[];
-  providers: { id: string; state: "unprobed" | "selected" }[];
-}
 /** Trusted application dependency. Returned native options contain credentials. */
 export interface ConnectionOptionsProvider {
-  getOwnerOptions(options?: AcquireOptions): Promise<NativeConnectionOptions>;
-  getCallerOptions(
-    context: CallerContext,
-    options?: AcquireOptions,
-  ): Promise<NativeConnectionOptions>;
-  /** Must be redacted and must not authenticate or acquire credentials. */
-  diagnostics?(): Promise<ConnectionOptionsDiagnostics>;
-}
-export interface ConnectionOptionsFactory extends ConnectionOptionsProvider {
-  diagnostics(): Promise<ConnectionOptionsDiagnostics>;
-  /** Abort factory waits, not connections created from prior snapshots. */
-  close(): Promise<void>;
+  getOwnerOptions(): NativeConnectionOptions;
+  /** The caller's token, taken from the sf-context-current-user-token header. */
+  getCallerOptions(token: string): NativeConnectionOptions;
 }
 export interface ConnectionOptionsFactoryOptions {
-  connection?: ConnectionOptions;
-  environment?: Environment;
-  platform?: Platform;
-  /** Interactive login needs local execution; "always" permits it without a terminal. */
-  interactive?: "auto" | "always" | "never";
-  /**
-   * When caller context is missing, use owner credentials in local or preview execution
-   * ("auto") or never ("error").
-   */
-  callerFallback?: "auto" | "error";
   /**
    * Run caller views and getCallerOptions() as the owner, even when caller context is present.
    * The SDK doesn't detect when: pass the app's own condition, such as
    * `process.env.NODE_ENV === "development"`. Default: false.
    */
   callerAsOwner?: boolean;
-  authTimeoutMs?: number;
-  driverOptions?: DriverOptions;
-  logger?: (event: LogEvent) => void;
 }
 
-type Logger = (event: LogEvent) => void;
 // Non-enumerable and immutable, but shared by mixed ESM/CJS consumers, like connection scopes.
-const loggerKey = Symbol.for("@snowflake/sar-sdk/logger/v1");
 const callerAsOwnerKey = Symbol.for("@snowflake/sar-sdk/caller-as-owner/v1");
-const loggerOf = (provider: object): unknown => (provider as Record<symbol, unknown>)[loggerKey];
+// The driver sends `token` in the login only for these authenticators.
+const tokenAuthenticators = ["OAUTH", "PROGRAMMATIC_ACCESS_TOKEN"];
 const runsCallersAsOwner = (provider: object) =>
   (provider as Record<symbol, unknown>)[callerAsOwnerKey] === true;
 
-/** Wraps a logger to ignore its exceptions and rejections. */
-function guard(logger: unknown): Logger | undefined {
-  if (typeof logger !== "function") return undefined;
-  return (event) => {
-    try {
-      void Promise.resolve((logger as Logger)(event)).catch(() => {});
-    } catch {
-      /* Logging cannot change an operation. */
-    }
-  };
-}
-
-function freezeProvider<T extends object>(
-  provider: T,
-  logger: unknown,
-  callerAsOwner: boolean,
-): Readonly<T> {
-  if (typeof logger === "function") Object.defineProperty(provider, loggerKey, { value: logger });
+function freezeProvider<T extends object>(provider: T, callerAsOwner: boolean): Readonly<T> {
   if (callerAsOwner) Object.defineProperty(provider, callerAsOwnerKey, { value: true });
   return Object.freeze(provider);
 }
 
-/** The logger of the factory a provider came from; custom providers have none. */
-export function providerLogger(provider: ConnectionOptionsProvider): Logger | undefined {
-  return guard(loggerOf(provider));
-}
-
-/** Lazy source selection; each async getter acquires fresh credentials without SQL login. */
+/**
+ * Native options from explicit connection options. Nothing is read until an option getter runs, so
+ * a `token` getter on the connection options (see fromPlatform) can rotate. Caller options append
+ * the caller's token to the `token` of an OAUTH or PROGRAMMATIC_ACCESS_TOKEN connection, the only
+ * authenticators whose login sends it, and throw AUTH_NOT_SUPPORTED for any other.
+ */
 export function createConnectionOptions(
-  source?: AuthProvider | readonly AuthProvider[],
+  connection: NativeConnectionOptions,
   input: ConnectionOptionsFactoryOptions = {},
-): ConnectionOptionsFactory {
-  keys(
-    input,
-    [
-      "connection",
-      "environment",
-      "platform",
-      "interactive",
-      "callerFallback",
-      "callerAsOwner",
-      "authTimeoutMs",
-      "driverOptions",
-      "logger",
-    ],
-    "connection options",
+): ConnectionOptionsProvider {
+  keys(input, ["callerAsOwner"], "connection options");
+  if (input.callerAsOwner !== undefined && typeof input.callerAsOwner !== "boolean")
+    fail("INVALID_OPTIONS", "callerAsOwner must be a boolean");
+  if (!connection || typeof connection !== "object" || Array.isArray(connection))
+    fail("INVALID_OPTIONS", "Connection options must be an object");
+  const callerAsOwner = input.callerAsOwner === true;
+  // Copy descriptors, not values, so a getter keeps reading the current value.
+  const source = Object.defineProperties(
+    {} as Record<string, unknown>,
+    Object.getOwnPropertyDescriptors(connection),
   );
-  const options = internalOptions({
-    connection: input.connection,
-    environment: input.environment,
-    platform: input.platform,
-    auth: {
-      interactive: input.interactive,
-      callerFallback: input.callerFallback,
-      callerAsOwner: input.callerAsOwner,
-      providers:
-        source === undefined
-          ? undefined
-          : Array.isArray(source)
-            ? source
-            : [source as AuthProvider],
-    },
-    timeouts: { authMs: input.authTimeoutMs },
-    driverOptions: input.driverOptions,
-    logger: input.logger,
-  });
-  const log = guard(options.logger);
-  const manager = new AuthManager({ ...options, logger: log });
-  const shutdown = new AbortController();
-  let closed = false;
-  let fallbackReported = false;
-  async function acquire(caller: string | null | undefined, settings: AcquireOptions = {}) {
-    if (closed) fail("CLIENT_CLOSED", "Connection options factory is closed");
-    keys(settings, ["signal", "timeoutMs"], "credential acquisition");
-    signalOption(settings.signal);
-    duration(settings.timeoutMs, "Credential acquisition timeout");
-    const signal = AbortSignal.any([
-      shutdown.signal,
-      ...(settings.signal ? [settings.signal] : []),
-    ]);
-    checkAbort(signal);
-    const resolved = await deadline(
-      manager.acquire(caller),
-      settings.timeoutMs ?? options.timeouts?.authMs ?? 120_000,
-      signal,
-      "Credentials",
-    );
-    checkAbort(signal);
-    const native = {
-      ...credentialOptions(resolved.credential, resolved.detected, options),
-      ...options.driverOptions,
-      ...resolved.source.target,
+  function owner(): NativeConnectionOptions {
+    const target: Record<string, unknown> = {};
+    for (const key of ["account", "host", "accessUrl", "port", "protocol", "region"] as const)
+      if (key in source) target[key] = source[key];
+    const accessUrl = endpoint(target);
+    return {
+      ...source,
+      accessUrl,
       application: "SnowflakeAppRuntime",
       clientSessionKeepAlive: false,
       serverSessionKeepAlive: false,
-    };
-    if (caller === null && !fallbackReported) {
-      fallbackReported = true;
-      log?.({ event: "caller-fallback", environment: resolved.detected.environment });
-    }
-    return native;
+    } as NativeConnectionOptions;
   }
-  const factory = {
-    getOwnerOptions: (settings?: AcquireOptions) => acquire(undefined, settings),
-    async getCallerOptions(context: CallerContext, settings?: AcquireOptions) {
-      const token = callerToken(context);
-      return acquire(options.auth?.callerAsOwner ? undefined : token, settings);
+  return freezeProvider(
+    {
+      getOwnerOptions: owner,
+      getCallerOptions(token: string) {
+        if (typeof token !== "string" || !token.trim())
+          fail("CALLER_CONTEXT_REQUIRED", "Caller token cannot be empty");
+        const options = owner();
+        if (callerAsOwner) return options;
+        // Other authenticators ignore `token`, so a composed token would be dropped and the
+        // session would log in as the owner.
+        if (
+          !tokenAuthenticators.includes(String(options.authenticator ?? "SNOWFLAKE").toUpperCase())
+        )
+          throw new SarError(
+            "AUTH_NOT_SUPPORTED",
+            "Caller options need an OAUTH or PROGRAMMATIC_ACCESS_TOKEN connection, whose login sends the token; this connection's authenticator doesn't",
+            { nextStep: nextSteps.callerToken },
+          );
+        if (typeof options.token !== "string" || !options.token)
+          throw new SarError(
+            "AUTH_NOT_SUPPORTED",
+            "Caller options need the connection's token to append the caller's token to; set callerAsOwner: true to run callers with owner credentials",
+            { nextStep: nextSteps.callerToken },
+          );
+        return { ...options, token: `${options.token}.${token}` };
+      },
     },
-    async diagnostics() {
-      const detected = await detect(options.environment, options.platform);
-      let origin: string | undefined;
-      if (
-        options.connection?.accessUrl ||
-        options.connection?.host ||
-        options.connection?.account
-      ) {
-        try {
-          origin = endpoint(options.connection);
-        } catch {
-          /* Do not echo invalid targets. */
-        }
-      }
-      return {
-        ...detected,
-        connectionName:
-          source === undefined
-            ? selectedName(options.connection ?? {})
-            : (
-                manager.providers.find((provider) => provider.id === manager.selectedId) ??
-                (manager.providers.length === 1 ? manager.providers[0] : undefined)
-              )?.connectionName,
-        endpoint: origin,
-        ...(manager.ignoredProfileKeys
-          ? { ignoredProfileKeys: [...manager.ignoredProfileKeys] }
-          : {}),
-        providers: manager.providers.map((provider) => ({
-          id: provider.id,
-          state: manager.selectedId === provider.id ? ("selected" as const) : ("unprobed" as const),
-        })),
-      };
-    },
-    async close() {
-      closed = true;
-      shutdown.abort();
-    },
-  };
-  return freezeProvider(factory, options.logger, options.auth?.callerAsOwner === true);
+    callerAsOwner,
+  );
 }
+
+/** Rejects every call; the default when a component is given no connection options. */
+export const unconfiguredOptions: ConnectionOptionsProvider = Object.freeze({
+  getOwnerOptions: () => fail("AUTH_NOT_FOUND", unconfigured),
+  getCallerOptions: () => fail("AUTH_NOT_FOUND", unconfigured),
+});
+const unconfigured =
+  "No connection options configured. Pass connectionOptions: createConnectionOptions(...).";
 
 /** Snapshot methods with receivers; structural providers are trusted code, not branded objects. */
 export function snapshotProvider(provider: ConnectionOptionsProvider): ConnectionOptionsProvider {
   if (
     !provider ||
     typeof provider.getOwnerOptions !== "function" ||
-    typeof provider.getCallerOptions !== "function" ||
-    (provider.diagnostics !== undefined && typeof provider.diagnostics !== "function")
+    typeof provider.getCallerOptions !== "function"
   )
     fail("INVALID_OPTIONS", "connectionOptions must implement owner and caller options getters");
   return freezeProvider(
     {
       getOwnerOptions: provider.getOwnerOptions.bind(provider),
       getCallerOptions: provider.getCallerOptions.bind(provider),
-      diagnostics: provider.diagnostics?.bind(provider),
     },
-    loggerOf(provider),
     runsCallersAsOwner(provider),
   );
-}
-
-export async function providerDiagnostics(
-  provider: ConnectionOptionsProvider,
-): Promise<ConnectionOptionsDiagnostics> {
-  return provider.diagnostics
-    ? provider.diagnostics()
-    : {
-        environment: "unknown",
-        platform: "unknown",
-        evidence: ["custom-options-provider"],
-        providers: [],
-      };
 }
 
 /**
@@ -276,26 +145,22 @@ export async function providerDiagnostics(
  * callerAsOwner provider are owner scopes, but their caller context is still validated.
  */
 export function optionsScope(provider: ConnectionOptionsProvider, context?: CallerContext) {
-  const acquire = async (settings?: AcquireOptions) =>
-    snapshotNativeOptions(await provider.getOwnerOptions(settings));
   const token = context === undefined ? undefined : callerToken(context);
   if (token === undefined || runsCallersAsOwner(provider))
     return Object.freeze({
-      acquire,
+      options: () => snapshotNativeOptions(provider.getOwnerOptions()),
       mode: "owner" as const,
-      callerPresent: true,
       contextKey: undefined,
     });
-  const snapshot: CallerContext = Object.freeze(
-    token === null ? { headers: Object.freeze({ get: () => null }) } : { token },
-  );
+  if (token === null)
+    throw new SarError("CALLER_CONTEXT_REQUIRED", "Caller context carries no caller token", {
+      nextStep: nextSteps.callerContext,
+    });
   return Object.freeze({
     mode: "caller" as const,
-    callerPresent: token !== null,
     /** A digest of the caller token that groups views made from the same token. */
-    contextKey: token === null ? undefined : createHash("sha256").update(token).digest("base64url"),
-    acquire: async (settings?: AcquireOptions) =>
-      snapshotNativeOptions(await provider.getCallerOptions(snapshot, settings)),
+    contextKey: createHash("sha256").update(token).digest("base64url"),
+    options: () => snapshotNativeOptions(provider.getCallerOptions(token)),
   });
 }
 

@@ -19,52 +19,48 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type snowflake from "snowflake-sdk";
 import {
   createConnectionOptions,
-  fromCredentials,
+  fromPlatform,
   fromToml,
-  type ConnectionOptionsFactory,
-  type ConnectionOptionsFactoryOptions,
+  type ConnectionOptionsProvider,
 } from "../src/auth.js";
 import { createSarClient } from "../src/index.js";
 import { nextSteps, SarError } from "../src/errors.js";
 import { fakeDriver } from "./fake-driver.js";
+import { deferred } from "./fake-query-service.js";
 import type { QueryReference, SarClientOptions } from "../src/types.js";
 
+// Synthetic platform token mounts; no real file under /snowflake is ever read.
 const mountedFiles = vi.hoisted(() => new Map<string, string>());
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
   const missing = () => Object.assign(new Error("Synthetic absent mount"), { code: "ENOENT" });
   return {
     ...actual,
-    access: vi.fn(async (...args: Parameters<typeof actual.access>) => {
+    existsSync: vi.fn((...args: Parameters<typeof actual.existsSync>) => {
       const filename = String(args[0]);
-      if (!filename.startsWith("/snowflake/")) return actual.access(...args);
-      if (!mountedFiles.has(filename)) throw missing();
+      return filename.startsWith("/snowflake/")
+        ? mountedFiles.has(filename)
+        : actual.existsSync(...args);
     }),
-    readFile: vi.fn(async (...args: Parameters<typeof actual.readFile>) => {
+    readFileSync: vi.fn((...args: Parameters<typeof actual.readFileSync>) => {
       const filename = String(args[0]);
-      if (!filename.startsWith("/snowflake/")) return actual.readFile(...args);
+      if (!filename.startsWith("/snowflake/")) return actual.readFileSync(...args);
       if (!mountedFiles.has(filename)) throw missing();
       return mountedFiles.get(filename);
     }),
   };
-});
-vi.mock("../src/auth-client.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/auth-client.js")>();
-  return { ...actual, createConnectionOptions: vi.fn(actual.createConnectionOptions) };
 });
 
 let directory: string;
 beforeEach(async () => {
   directory = await mkdtemp(path.join(os.tmpdir(), "sar-client-options-"));
   mountedFiles.clear();
-  vi.clearAllMocks();
   for (const key of Object.keys(process.env))
     if (key.startsWith("SNOWFLAKE_")) vi.stubEnv(key, undefined);
   vi.stubEnv("SNOWFLAKE_HOME", directory);
-  // Without platform evidence or an explicit environment, CI keeps detection at "unknown".
-  vi.stubEnv("CI", "true");
 });
 afterEach(async () => {
   vi.unstubAllEnvs();
@@ -81,8 +77,11 @@ const profiles = () =>
     ].join("\n"),
     { mode: 0o600 },
   );
-const owned = () =>
-  vi.mocked(createConnectionOptions).mock.results.at(-1)?.value as ConnectionOptionsFactory;
+/** Reads the connection options only when a session opens, as a rotating source would. */
+const lazily = (read: () => snowflake.ConnectionOptions): ConnectionOptionsProvider => ({
+  getOwnerOptions: () => createConnectionOptions(read()).getOwnerOptions(),
+  getCallerOptions: (token) => createConnectionOptions(read()).getCallerOptions(token),
+});
 const missingCaller = { headers: new Headers() };
 const reference: QueryReference = {
   version: 1,
@@ -94,15 +93,25 @@ const reference: QueryReference = {
 };
 
 describe("connection settings on createSarClient", () => {
-  it("selects a SnowCLI profile and default SQL context for the owned factory", async () => {
+  it("connects with a SnowCLI profile and default SQL context from the connection options", async () => {
     await profiles();
     const fake = fakeDriver();
     const client = createSarClient({
       driver: fake.driver,
-      connection: { name: "dev", warehouse: "APP_WH", role: "APP_ROLE" },
+      connectionOptions: createConnectionOptions({
+        ...fromToml({ name: "dev" }),
+        warehouse: "APP_WH",
+        role: "APP_ROLE",
+      }),
     });
     try {
-      expect((await client.diagnostics()).connectionName).toBe("dev");
+      expect(Object.keys(await client.diagnostics()).sort()).toEqual([
+        "activeConnections",
+        "idleConnections",
+        "physicalConnections",
+        "queuedOperations",
+        "sessionMode",
+      ]);
       await client.connect();
       expect(fake.connections[0]?.config).toMatchObject({
         account: "dev-account",
@@ -114,134 +123,126 @@ describe("connection settings on createSarClient", () => {
       await client.close();
     }
   });
-  it("passes environment and platform to the owned factory", async () => {
+  it("appends the caller's token to a profile's token or a platform's mounted token", async () => {
     await profiles();
+    mountedFiles.set("/snowflake/session/token", "service-token");
+    vi.stubEnv("SNOWFLAKE_ACCOUNT", "test");
     const fake = fakeDriver();
-    const client = createSarClient({
+    const profile = createSarClient({
       driver: fake.driver,
-      connection: { name: "dev" },
-      environment: "local",
-      platform: "spcs",
+      connectionOptions: createConnectionOptions(fromToml({ name: "dev" })),
+    });
+    const platform = createSarClient({
+      driver: fake.driver,
+      connectionOptions: createConnectionOptions(fromPlatform()),
     });
     try {
-      expect(await client.diagnostics()).toMatchObject({ environment: "local", platform: "spcs" });
-      await client.asCaller({ token: "alice" }).query("SELECT 1");
-      expect(fake.connections[0]?.config.token).toBe("dev-token.alice");
+      await profile.asCaller({ token: "alice" }).query("SELECT 1");
+      await platform.asCaller({ token: "alice" }).query("SELECT 2");
+      expect(fake.connections.map((connection) => connection.config.token)).toEqual([
+        "dev-token.alice",
+        "service-token.alice",
+      ]);
     } finally {
-      await client.close();
+      await Promise.all([profile.close(), platform.close()]);
     }
   });
-  it("applies the interactive policy and driver options to owned logins", async () => {
-    vi.stubEnv("CI", undefined);
+  it("passes an interactive profile's authenticator and driver options to owned logins", async () => {
     await profiles();
     const fake = fakeDriver();
     const client = createSarClient({
       driver: fake.driver,
-      connection: { name: "sso" },
-      environment: "local",
-      interactive: "always",
-      driverOptions: { clientStoreTemporaryCredential: true },
-    });
-    const strict = createSarClient({
-      driver: fake.driver,
-      connection: { name: "sso" },
-      environment: "local",
-      interactive: "never",
+      connectionOptions: createConnectionOptions({
+        ...fromToml({ name: "sso" }),
+        clientStoreTemporaryCredential: true,
+      }),
     });
     try {
       await client.connect();
       expect(fake.connections[0]?.config).toMatchObject({
-        authenticator: "EXTERNALBROWSER",
+        authenticator: "externalbrowser",
         username: "developer",
         clientStoreTemporaryCredential: true,
       });
-      await expect(strict.connect()).rejects.toMatchObject({
-        code: "AUTH_INTERACTION_REQUIRED",
-        details: { nextStep: nextSteps.interaction },
-      });
-      expect(fake.connections).toHaveLength(1);
     } finally {
-      await Promise.all([client.close(), strict.close()]);
+      await client.close();
     }
   });
-  it("applies callerFallback and reports fallback to the logger", async () => {
+  it("refuses missing caller context without falling back or logging the refusal", async () => {
     await profiles();
     const fake = fakeDriver();
     const logger = vi.fn();
     const client = createSarClient({
       driver: fake.driver,
-      connection: { name: "dev" },
-      environment: "local",
+      connectionOptions: createConnectionOptions(fromToml({ name: "dev" })),
       logger,
     });
-    const strict = createSarClient({
+    try {
+      expect(() => client.asCaller(missingCaller)).toThrow(
+        expect.objectContaining({
+          code: "CALLER_CONTEXT_REQUIRED",
+          message: "Caller context carries no caller token",
+          details: { nextStep: nextSteps.callerContext },
+        }),
+      );
+      expect(fake.connections).toHaveLength(0);
+      expect(logger).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+  it("bounds connecting with the per-operation authTimeoutMs, not a client timeout", async () => {
+    const login = deferred();
+    const fake = fakeDriver({ connectGate: login.promise });
+    const client = createSarClient({
       driver: fake.driver,
-      connection: { name: "dev" },
-      environment: "local",
-      callerFallback: "error",
+      connectionOptions: createConnectionOptions({ account: "test", token: "t" }),
     });
     try {
-      await client.asCaller(missingCaller).query("SELECT 1");
-      expect(fake.connections[0]?.config.token).toBe("dev-token");
-      expect(logger.mock.calls).toEqual([
-        [{ event: "caller-fallback", environment: "local" }],
-        [{ event: "session-opened", mode: "caller", durationMs: expect.any(Number) }],
-        [
-          {
-            event: "query-succeeded",
-            queryId: "query-1",
-            durationMs: expect.any(Number),
-            rowCount: 1,
-          },
-        ],
-      ]);
-      const error = await strict
-        .asCaller(missingCaller)
-        .query("SELECT 1")
-        .catch((error: unknown) => error);
-      expect(error).toMatchObject({
-        code: "CALLER_CONTEXT_REQUIRED",
-        message: 'Caller context is required because callerFallback is "error"',
-        details: { nextStep: nextSteps.ingress },
+      await expect(client.query("SELECT 1", { authTimeoutMs: 20 })).rejects.toMatchObject({
+        code: "TIMEOUT",
       });
       expect(fake.connections).toHaveLength(1);
     } finally {
-      await Promise.all([client.close(), strict.close()]);
+      login.resolve();
+      await client.close();
     }
+    expect(() =>
+      createSarClient({ timeouts: { authMs: 5_000 } } as unknown as SarClientOptions),
+    ).toThrow(
+      expect.objectContaining({
+        code: "INVALID_OPTIONS",
+        message: "Unknown timeouts option: authMs",
+      }),
+    );
   });
-  it("passes timeouts.authMs to the owned factory and closes it with the client", async () => {
+  it("borrows a supplied provider, which stays usable after the client closes", async () => {
+    const supplied = createConnectionOptions({
+      account: "test",
+      authenticator: "OAUTH",
+      token: "t",
+    });
+    const client = createSarClient({ connectionOptions: supplied });
+    await client.close();
+    expect(supplied.getOwnerOptions().token).toBe("t");
+    expect(supplied.getCallerOptions("alice").token).toBe("t.alice");
+  });
+  it("accepts a logger alongside connectionOptions", async () => {
+    const fake = fakeDriver();
     const logger = vi.fn();
     const client = createSarClient({
-      connection: { name: "dev" },
-      callerFallback: "error",
-      callerAsOwner: true,
-      logger,
-      timeouts: { authMs: 5_000 },
-    });
-    expect(createConnectionOptions).toHaveBeenCalledExactlyOnceWith(undefined, {
-      connection: { name: "dev" },
-      environment: undefined,
-      platform: undefined,
-      interactive: undefined,
-      callerFallback: "error",
-      callerAsOwner: true,
-      authTimeoutMs: 5_000,
-      driverOptions: {},
+      driver: fake.driver,
+      connectionOptions: createConnectionOptions({ account: "test", token: "t" }),
       logger,
     });
-    const factory = owned();
-    await client.close();
-    await expect(factory.getOwnerOptions()).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
-  });
-  it("borrows a supplied provider without creating or closing an owned factory", async () => {
-    const supplied = createConnectionOptions(
-      fromCredentials({ target: { account: "test" }, credential: { type: "oauth", token: "t" } }),
-    );
-    const client = createSarClient({ connectionOptions: supplied, timeouts: { authMs: 5_000 } });
-    expect(createConnectionOptions).toHaveBeenCalledOnce();
-    await client.close();
-    expect((await supplied.getOwnerOptions()).token).toBe("t");
-    await supplied.close();
+    try {
+      await client.connect();
+      expect(logger.mock.calls).toEqual([
+        [{ event: "session-opened", mode: "owner", durationMs: expect.any(Number) }],
+      ]);
+    } finally {
+      await client.close();
+    }
   });
   it.each([
     ["connection", { name: "dev" }],
@@ -249,118 +250,74 @@ describe("connection settings on createSarClient", () => {
     ["platform", "spcs"],
     ["interactive", "always"],
     ["callerFallback", "error"],
+    ["callerAsOwner", true],
     ["driverOptions", { clientStoreTemporaryCredential: true }],
-    ["logger", () => {}],
-  ] as const)("rejects %s alongside connectionOptions", (key, value) => {
-    const supplied = createConnectionOptions([]);
-    expect(() =>
-      createSarClient({ connectionOptions: supplied, [key]: value } as SarClientOptions),
-    ).toThrow(
-      expect.objectContaining({
-        code: "INVALID_OPTIONS",
-        message: `${key} cannot be combined with connectionOptions; configure the supplied provider instead`,
-      }),
-    );
-    expect(createConnectionOptions).toHaveBeenCalledOnce();
-    const client = createSarClient({
-      connectionOptions: supplied,
-      [key]: undefined,
-    } as SarClientOptions);
-    expect(createConnectionOptions).toHaveBeenCalledOnce();
-    return client.close();
+  ] as const)("rejects the removed %s client option", (key, value) => {
+    const supplied = createConnectionOptions({ account: "test", token: "t" });
+    const unknown = expect.objectContaining({
+      code: "INVALID_OPTIONS",
+      message: `Unknown client option: ${key}`,
+    });
+    for (const settings of [
+      { [key]: value },
+      { connectionOptions: supplied, [key]: value },
+      { connectionOptions: supplied, [key]: undefined },
+    ])
+      expect(() => createSarClient(settings as SarClientOptions)).toThrow(unknown);
   });
   it.each([
-    [{ connection: { password: "synthetic" } }, "Unknown connection option: password"],
-    [{ connection: { name: " " } }, "name must be a nonempty string"],
-    [{ environment: "staging" }, "Invalid environment"],
-    [{ platform: "other" }, "Invalid platform"],
-    [{ interactive: "yes" }, "Invalid interactive"],
-    [{ callerFallback: "sometimes" }, "Invalid callerFallback"],
-    [{ driverOptions: { token: "synthetic" } }, "Unknown driverOptions option: token"],
-    [{ driverOptions: { proxyPort: 0 } }, "Invalid proxyPort"],
     [{ logger: "console" }, "logger must be a function"],
     [{ authTimeoutMs: 1_000 }, "Unknown client option: authTimeoutMs"],
-  ])("validates connection settings at runtime: %o", (settings, message) => {
+    [{ timeouts: { authMs: 1_000 } }, "Unknown timeouts option: authMs"],
+    [
+      { connectionOptions: {} },
+      "connectionOptions must implement owner and caller options getters",
+    ],
+  ])("validates client settings at runtime: %o", (settings, message) => {
     expect(() => createSarClient(settings as unknown as SarClientOptions)).toThrow(
       expect.objectContaining({ code: "INVALID_OPTIONS", message }),
     );
-    expect(createConnectionOptions).not.toHaveBeenCalled();
   });
 });
 
-describe("callerFallback and callerAsOwner", () => {
-  it.each([
-    ["unknown", {}],
-    ["local", { CI: undefined, NODE_ENV: "development", npm_lifecycle_event: "dev" }],
-  ] as const)(
-    "runs caller views as the owner under callerAsOwner without platform evidence (%s)",
-    async (environment, variables) => {
-      for (const [key, value] of Object.entries(variables)) vi.stubEnv(key, value);
-      await profiles();
-      const fake = fakeDriver();
-      const logger = vi.fn();
-      const client = createSarClient({
-        driver: fake.driver,
-        connection: { name: "dev" },
-        callerAsOwner: true,
-        logger,
-      });
-      try {
-        expect((await client.diagnostics()).environment).toBe(environment);
-        await client.asCaller(missingCaller).query("SELECT 1");
-        await client.asCaller({ headers: new Headers() }).withConnection(async () => {});
-        await client.asCaller({ token: "alice" }).query("SELECT 2");
-        expect(fake.connections.map((connection) => connection.config.token)).toEqual([
-          "dev-token",
-          "dev-token",
-          "dev-token",
-        ]);
-        for (const connection of fake.connections)
-          expect(connection.destroy).toHaveBeenCalledOnce();
-        expect(logger.mock.calls).toEqual([
-          [{ event: "session-opened", mode: "owner", durationMs: expect.any(Number) }],
-          [
-            {
-              event: "query-succeeded",
-              queryId: "query-1",
-              durationMs: expect.any(Number),
-              rowCount: 1,
-            },
-          ],
-          [{ event: "session-opened", mode: "owner", durationMs: expect.any(Number) }],
-          [{ event: "session-opened", mode: "owner", durationMs: expect.any(Number) }],
-          [
-            {
-              event: "query-succeeded",
-              queryId: "query-3",
-              durationMs: expect.any(Number),
-              rowCount: 1,
-            },
-          ],
-        ]);
-      } finally {
-        await client.close();
-      }
-    },
-  );
-  it("falls back with preview evidence under auto", async () => {
-    mountedFiles.set("/snowflake/secrets/snowflake-session/token", "service-token");
-    vi.stubEnv("SNOWFLAKE_PREVIEW_ORIGIN", "https://preview.invalid");
-    vi.stubEnv("SNOWFLAKE_ACCOUNT", "test");
+describe("callerAsOwner", () => {
+  it("runs every caller view as the owner, with or without caller context", async () => {
+    await profiles();
     const fake = fakeDriver();
     const logger = vi.fn();
-    const client = createSarClient({ driver: fake.driver, callerFallback: "auto", logger });
+    const client = createSarClient({
+      driver: fake.driver,
+      connectionOptions: createConnectionOptions(fromToml({ name: "dev" }), {
+        callerAsOwner: true,
+      }),
+      logger,
+    });
     try {
-      expect((await client.diagnostics()).environment).toBe("preview");
       await client.asCaller(missingCaller).query("SELECT 1");
-      expect(fake.connections[0]?.config.token).toBe("service-token");
+      await client.asCaller({ headers: new Headers() }).withConnection(async () => {});
+      await client.asCaller({ token: "alice" }).query("SELECT 2");
+      expect(fake.connections.map((connection) => connection.config.token)).toEqual([
+        "dev-token",
+        "dev-token",
+        "dev-token",
+      ]);
+      for (const connection of fake.connections) expect(connection.destroy).toHaveBeenCalledOnce();
       expect(logger.mock.calls).toEqual([
-        [{ event: "caller-fallback", environment: "preview" }],
-        [{ event: "session-opened", mode: "caller", durationMs: expect.any(Number) }],
+        [{ event: "session-opened", mode: "owner", durationMs: expect.any(Number) }],
         [
           {
             event: "query-succeeded",
             queryId: "query-1",
+            durationMs: expect.any(Number),
+            rowCount: 1,
+          },
+        ],
+        [{ event: "session-opened", mode: "owner", durationMs: expect.any(Number) }],
+        [{ event: "session-opened", mode: "owner", durationMs: expect.any(Number) }],
+        [
+          {
+            event: "query-succeeded",
+            queryId: "query-3",
             durationMs: expect.any(Number),
             rowCount: 1,
           },
@@ -370,21 +327,50 @@ describe("callerFallback and callerAsOwner", () => {
       await client.close();
     }
   });
-  it("runs a present preview caller token as the owner under callerAsOwner", async () => {
-    mountedFiles.set("/snowflake/secrets/snowflake-session/token", "service-token");
+  it("refuses missing callers even with preview evidence, since nothing is detected", async () => {
+    mountedFiles.set("/snowflake/session/token", "service-token");
     vi.stubEnv("SNOWFLAKE_PREVIEW_ORIGIN", "https://preview.invalid");
     vi.stubEnv("SNOWFLAKE_ACCOUNT", "test");
     const fake = fakeDriver();
     const logger = vi.fn();
-    const client = createSarClient({ driver: fake.driver });
-    const owner = createSarClient({ driver: fake.driver, callerAsOwner: true, logger });
+    const client = createSarClient({
+      driver: fake.driver,
+      connectionOptions: createConnectionOptions(fromPlatform()),
+      logger,
+    });
+    try {
+      expect(() => client.asCaller(missingCaller)).toThrow(
+        expect.objectContaining({ code: "CALLER_CONTEXT_REQUIRED" }),
+      );
+      expect(fake.connections).toHaveLength(0);
+      expect(logger).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+  it("runs a present preview caller token as the owner under callerAsOwner", async () => {
+    mountedFiles.set("/snowflake/session/token", "service-token");
+    vi.stubEnv("SNOWFLAKE_PREVIEW_ORIGIN", "https://preview.invalid");
+    vi.stubEnv("SNOWFLAKE_ACCOUNT", "test");
+    const fake = fakeDriver();
+    const logger = vi.fn();
+    const client = createSarClient({
+      driver: fake.driver,
+      connectionOptions: createConnectionOptions(fromPlatform()),
+    });
+    const owner = createSarClient({
+      driver: fake.driver,
+      connectionOptions: createConnectionOptions(fromPlatform(), {
+        callerAsOwner: true,
+      }),
+      logger,
+    });
     const headers = new Headers({ "sf-context-current-user-token": "preview-user" });
     try {
-      expect((await owner.diagnostics()).environment).toBe("preview");
       await client.asCaller({ headers }).query("SELECT 1");
       await owner.asCaller({ headers }).query("SELECT 2");
       expect(fake.connections.map((connection) => connection.config.token)).toEqual([
-        "preview-user",
+        "service-token.preview-user",
         "service-token",
       ]);
       expect(logger.mock.calls).toEqual([
@@ -402,23 +388,30 @@ describe("callerFallback and callerAsOwner", () => {
       await Promise.all([client.close(), owner.close()]);
     }
   });
-  it("refuses missing callers with deployed evidence unless callerAsOwner is set", async () => {
+  it("refuses missing callers on a platform token unless callerAsOwner is set", async () => {
     mountedFiles.set("/snowflake/session/token", "service-token");
     vi.stubEnv("SNOWFLAKE_ACCOUNT", "test");
     const fake = fakeDriver();
-    const client = createSarClient({ driver: fake.driver, callerAsOwner: false });
-    const owner = createSarClient({ driver: fake.driver, callerAsOwner: true });
+    const client = createSarClient({
+      driver: fake.driver,
+      connectionOptions: createConnectionOptions(fromPlatform(), {
+        callerAsOwner: false,
+      }),
+    });
+    const owner = createSarClient({
+      driver: fake.driver,
+      connectionOptions: createConnectionOptions(fromPlatform(), {
+        callerAsOwner: true,
+      }),
+    });
     try {
-      expect((await client.diagnostics()).environment).toBe("deployed");
-      const error = await client
-        .asCaller(missingCaller)
-        .query("SELECT 1")
-        .catch((error: unknown) => error);
-      expect(error).toMatchObject({
-        code: "CALLER_CONTEXT_REQUIRED",
-        message: "Caller context is required outside recognized local/preview execution",
-        details: { nextStep: nextSteps.ingress },
-      });
+      expect(() => client.asCaller(missingCaller)).toThrow(
+        expect.objectContaining({
+          code: "CALLER_CONTEXT_REQUIRED",
+          message: "Caller context carries no caller token",
+          details: { nextStep: nextSteps.callerContext },
+        }),
+      );
       expect(fake.connections).toHaveLength(0);
       await client.query("SELECT 1");
       await owner.asCaller(missingCaller).query("SELECT 2");
@@ -437,204 +430,166 @@ describe("callerFallback and callerAsOwner", () => {
     const fake = fakeDriver();
     const client = createSarClient({
       driver: fake.driver,
-      connection: { name: "dev" },
-      environment: "local",
-      callerAsOwner: false,
+      connectionOptions: createConnectionOptions(fromToml({ name: "dev" }), {
+        callerAsOwner: false,
+      }),
     });
-    const caller = client.asCaller(missingCaller);
     try {
-      for (const operation of [
-        () => caller.submitDetached("SELECT 1"),
-        () => caller.pollQuery({ ...reference, mode: "caller" }),
-      ])
-        await expect(operation()).rejects.toMatchObject({
+      // The view itself is refused, so no detached caller method can run.
+      expect(() => client.asCaller(missingCaller)).toThrow(
+        expect.objectContaining({
           code: "CALLER_CONTEXT_REQUIRED",
-          message: "Detached queries require caller credentials even locally",
-          details: { nextStep: nextSteps.ingress },
-        });
+          details: { nextStep: nextSteps.callerContext },
+        }),
+      );
+      await expect(client.asCaller({ token: "alice" }).pollQuery(reference)).rejects.toMatchObject({
+        code: "QUERY_IDENTITY_MISMATCH",
+      });
       expect(fake.connections).toHaveLength(0);
     } finally {
       await client.close();
     }
   });
-  const policyOptions = (
-    environment: "local" | "preview" | "unknown" | "deployed",
-    settings: Pick<ConnectionOptionsFactoryOptions, "callerFallback" | "callerAsOwner">,
-  ) =>
-    createConnectionOptions(
-      fromCredentials({
-        target: { account: "test" },
-        credential: { type: "oauth", token: "owner" },
-      }),
-      { ...settings, environment: environment === "unknown" ? undefined : environment },
-    );
+  const ownerConnection = { account: "test", authenticator: "OAUTH", token: "owner" };
   it.each([
-    ["local", { callerFallback: "auto" }],
-    ["local", { callerFallback: "error", callerAsOwner: true }],
-    ["preview", { callerFallback: "auto" }],
-    ["preview", { callerFallback: "error", callerAsOwner: true }],
-    ["unknown", { callerFallback: "auto", callerAsOwner: true }],
-    ["deployed", { callerFallback: "auto", callerAsOwner: true }],
+    [{ callerAsOwner: true }, "owner"],
+    [{ callerAsOwner: false }, "owner.alice"],
+    [{}, "owner.alice"],
+  ] as const)("returns caller options under %j", (settings, token) => {
+    const options = createConnectionOptions(ownerConnection, settings);
+    expect(options.getCallerOptions("alice").token).toBe(token);
+  });
+  it.each([
+    [ownerConnection, {}, "", "CALLER_CONTEXT_REQUIRED", undefined],
+    [ownerConnection, { callerAsOwner: true }, " ", "CALLER_CONTEXT_REQUIRED", undefined],
+    [{ account: "test" }, {}, "alice", "AUTH_NOT_SUPPORTED", "callerToken"],
+    [{ account: "test" }, { callerAsOwner: false }, "alice", "AUTH_NOT_SUPPORTED", "callerToken"],
   ] as const)(
-    "uses owner options for missing caller context in %s execution under %j",
-    async (environment, settings) => {
-      const options = policyOptions(environment, settings);
+    "refuses caller options for %j under %j with token %j",
+    (connection, settings, callerToken, code, hint) => {
+      const options = createConnectionOptions(connection, settings);
+      let error: unknown;
       try {
-        expect((await options.diagnostics()).environment).toBe(environment);
-        expect((await options.getCallerOptions(missingCaller)).token).toBe("owner");
-      } finally {
-        await options.close();
+        options.getCallerOptions(callerToken);
+      } catch (thrown) {
+        error = thrown;
       }
+      expect(error).toMatchObject({ code });
+      expect((error as SarError).details.nextStep).toBe(hint && nextSteps[hint]);
     },
   );
-  it.each([
-    ["local", { callerFallback: "error" }, "ingress"],
-    ["preview", { callerFallback: "error" }, "ingress"],
-    ["unknown", { callerFallback: "auto" }, "callerFallback"],
-    ["unknown", { callerFallback: "auto", callerAsOwner: false }, "callerFallback"],
-    ["unknown", { callerFallback: "error" }, "ingress"],
-    ["deployed", { callerFallback: "auto" }, "ingress"],
-    ["deployed", { callerFallback: "error" }, "ingress"],
-  ] as const)("refuses in %s execution under %j", async (environment, settings, hint) => {
-    const refusals = {
-      auto: "Caller context is required outside recognized local/preview execution",
-      error: 'Caller context is required because callerFallback is "error"',
-    };
-    const options = policyOptions(environment, settings);
-    try {
-      expect((await options.diagnostics()).environment).toBe(environment);
-      await expect(options.getCallerOptions(missingCaller)).rejects.toMatchObject({
-        code: "CALLER_CONTEXT_REQUIRED",
-        message: refusals[settings.callerFallback],
-        details: { nextStep: nextSteps[hint] },
-      });
-    } finally {
-      await options.close();
-    }
-  });
-  it.each(["sometimes", "unless-deployed"])(
-    "rejects the %s policy on the factory and the client",
+  it.each(["auto", "error", "unless-deployed"])(
+    "rejects the removed callerFallback %s policy on the factory and the client",
     (callerFallback) => {
-      const invalid = expect.objectContaining({
-        code: "INVALID_OPTIONS",
-        message: "Invalid callerFallback",
-      });
+      const connection = { account: "test", token: "t" };
+      expect(() => createConnectionOptions(connection, { callerFallback } as never)).toThrow(
+        expect.objectContaining({
+          code: "INVALID_OPTIONS",
+          message: "Unknown connection options option: callerFallback",
+        }),
+      );
       expect(() =>
-        createConnectionOptions([], { callerFallback: callerFallback as never }),
-      ).toThrow(invalid);
-      expect(() => createSarClient({ callerFallback: callerFallback as never })).toThrow(invalid);
-      expect(createConnectionOptions).toHaveBeenCalledOnce();
+        createSarClient({
+          connectionOptions: createConnectionOptions(connection),
+          callerFallback,
+        } as unknown as SarClientOptions),
+      ).toThrow(
+        expect.objectContaining({
+          code: "INVALID_OPTIONS",
+          message: "Unknown client option: callerFallback",
+        }),
+      );
     },
   );
 });
 
 describe("nextStep hints", () => {
-  it("suggests ingress or callerAsOwner when the default policy refuses a local server", async () => {
+  it("suggests ingress or callerAsOwner when a caller view has no caller token", async () => {
     await profiles();
-    const fake = fakeDriver();
-    const client = createSarClient({ driver: fake.driver, connection: { name: "dev" } });
+    const client = createSarClient({
+      driver: fakeDriver().driver,
+      connectionOptions: createConnectionOptions(fromToml({ name: "dev" })),
+    });
     try {
-      const error = await client
-        .asCaller(missingCaller)
-        .query("SELECT 1")
-        .catch((error: unknown) => error);
+      let error: unknown;
+      try {
+        client.asCaller(missingCaller);
+      } catch (thrown) {
+        error = thrown;
+      }
       expect(error).toMatchObject({
         code: "CALLER_CONTEXT_REQUIRED",
-        message: "Caller context is required outside recognized local/preview execution",
-        details: { nextStep: nextSteps.callerFallback },
+        message: "Caller context carries no caller token",
+        details: { nextStep: nextSteps.callerContext },
       });
-      expect(nextSteps.callerFallback).toContain("callerAsOwner: true");
-      expect(nextSteps.callerFallback).not.toContain("unless-deployed");
+      expect(nextSteps.callerContext).toContain("callerAsOwner: true");
+      expect(nextSteps.callerContext).not.toContain("unless-deployed");
       expect(JSON.parse(JSON.stringify(error))).toMatchObject({
-        nextStep: nextSteps.callerFallback,
+        nextStep: nextSteps.callerContext,
       });
       expect(JSON.stringify(error)).not.toContain(directory);
     } finally {
       await client.close();
     }
   });
-  it("suggests only ingress when deployed under the default policy", async () => {
-    const client = createSarClient({ driver: fakeDriver().driver, environment: "deployed" });
+  it("points to SnowCLI discovery when no profile is configured", async () => {
+    const client = createSarClient({ driver: fakeDriver().driver });
     try {
-      await expect(client.asCaller(missingCaller).query("SELECT 1")).rejects.toMatchObject({
-        code: "CALLER_CONTEXT_REQUIRED",
-        details: { nextStep: nextSteps.ingress },
+      const unconfigured = await client.connect().catch((error: unknown) => error);
+      expect(unconfigured).toMatchObject({
+        code: "AUTH_NOT_FOUND",
+        message:
+          "No connection options configured. Pass connectionOptions: createConnectionOptions(...).",
       });
+      expect(unconfigured).not.toHaveProperty("details.nextStep");
+      let error: unknown;
+      try {
+        fromToml();
+      } catch (thrown) {
+        error = thrown;
+      }
+      expect(error).toMatchObject({
+        code: "CONFIG_NOT_FOUND",
+        details: { nextStep: nextSteps.discovery },
+      });
+      expect(JSON.stringify(error)).toContain("fromToml({ name })");
+      expect(JSON.stringify(error)).not.toContain(directory);
     } finally {
       await client.close();
     }
   });
-  it.each([
-    ["an unrecognized environment", {}],
-    ["deployed execution", { environment: "deployed" }],
-  ] as const)("suggests a non-interactive credential in %s", async (_label, settings) => {
+  it("keeps the discovery hint through the client when a lazy source selects a missing profile", async () => {
     await profiles();
-    const fake = fakeDriver();
     const client = createSarClient({
-      driver: fake.driver,
-      connection: { name: "sso" },
-      interactive: "always",
-      ...settings,
+      driver: fakeDriver().driver,
+      connectionOptions: lazily(() => fromToml({ name: "missing" })),
     });
     try {
       await expect(client.connect()).rejects.toMatchObject({
-        code: "AUTH_INTERACTION_REQUIRED",
-        details: { nextStep: nextSteps.nonInteractive },
+        code: "CONFIG_NOT_FOUND",
+        message: "Selected connection 'missing' was not found",
+        details: { nextStep: nextSteps.discovery },
       });
-      expect(fake.connections).toHaveLength(0);
     } finally {
       await client.close();
     }
   });
-  it("points to SnowCLI discovery when no credentials are found", async () => {
-    const client = createSarClient({ driver: fakeDriver().driver });
-    const custom = createSarClient({
-      driver: fakeDriver().driver,
-      connectionOptions: createConnectionOptions([]),
-    });
-    try {
-      const error = await client.connect().catch((error: unknown) => error);
-      expect(error).toMatchObject({
-        code: "AUTH_NOT_FOUND",
-        details: { nextStep: nextSteps.discovery },
-      });
-      expect(JSON.stringify(error)).toContain("SNOWFLAKE_CONNECTION_NAME");
-      expect(JSON.stringify(error)).not.toContain(directory);
-      const unrelated = await custom.connect().catch((error: unknown) => error);
-      expect(unrelated).toMatchObject({ code: "AUTH_NOT_FOUND" });
-      expect(unrelated).not.toHaveProperty("details.nextStep");
-    } finally {
-      await Promise.all([client.close(), custom.close()]);
-    }
+  it("ignores SNOWFLAKE_CONNECTION_NAME, selecting the configured default", async () => {
+    vi.stubEnv("SNOWFLAKE_CONNECTION_NAME", "missing");
+    await profiles();
+    expect(fromToml().token).toBe("default-token");
   });
-  it.each([
-    ["the connection option", { connection: { name: "missing" } }, {}],
-    ["SNOWFLAKE_CONNECTION_NAME", {}, { SNOWFLAKE_CONNECTION_NAME: "missing" }],
-  ] as const)(
-    "keeps the discovery hint through provider normalization when %s selects a missing profile",
-    async (_label, settings, variables) => {
-      for (const [key, value] of Object.entries(variables)) vi.stubEnv(key, value);
-      await profiles();
-      const client = createSarClient({ driver: fakeDriver().driver, ...settings });
-      try {
-        const error = await client.connect().catch((error: unknown) => error);
-        expect(error).toMatchObject({
-          code: "CONFIG_NOT_FOUND",
-          message: "Authentication provider resolution failed; the source was not changed",
-          details: { nextStep: nextSteps.discovery },
-        });
-        expect(JSON.stringify(error)).not.toContain("missing");
-      } finally {
-        await client.close();
-      }
-    },
-  );
   it("points to configFile when an explicit configuration file is absent", async () => {
     const configFile = path.join(directory, "absent.toml");
-    const client = createSarClient({ driver: fakeDriver().driver, connection: { configFile } });
-    const standalone = createConnectionOptions(fromToml({ configFile }));
+    const client = createSarClient({
+      driver: fakeDriver().driver,
+      connectionOptions: lazily(() => fromToml({ configFile })),
+    });
     try {
-      for (const operation of [() => client.connect(), () => standalone.getOwnerOptions()]) {
+      for (const operation of [
+        () => client.connect(),
+        async () => createConnectionOptions(fromToml({ configFile })),
+      ]) {
         const error = await operation().catch((error: unknown) => error);
         expect(error).toMatchObject({
           code: "CONFIG_NOT_FOUND",
@@ -643,14 +598,18 @@ describe("nextStep hints", () => {
         expect(JSON.stringify(error)).not.toContain(directory);
       }
     } finally {
-      await Promise.all([client.close(), standalone.close()]);
+      await client.close();
     }
   });
   it("keeps nextStep when a detached lookup re-wraps the failure", async () => {
-    const client = createSarClient({ driver: fakeDriver().driver });
+    await profiles();
+    const client = createSarClient({
+      driver: fakeDriver().driver,
+      connectionOptions: lazily(() => fromToml({ name: "missing" })),
+    });
     try {
       await expect(client.pollQuery(reference)).rejects.toMatchObject({
-        code: "AUTH_NOT_FOUND",
+        code: "CONFIG_NOT_FOUND",
         details: {
           nextStep: nextSteps.discovery,
           queryId: reference.queryId,
@@ -661,21 +620,24 @@ describe("nextStep hints", () => {
       await client.close();
     }
   });
-  it("does not serialize hints that providers supply", async () => {
+  it("passes through a hint that a provider's SarError supplies", async () => {
     const client = createSarClient({
       driver: fakeDriver().driver,
-      connectionOptions: createConnectionOptions({
-        id: "custom",
-        async resolve() {
+      connectionOptions: {
+        getOwnerOptions() {
           throw new SarError("CONFIG_NOT_FOUND", "synthetic", { nextStep: "synthetic-hint" });
         },
-      }),
+        getCallerOptions() {
+          throw new SarError("CONFIG_NOT_FOUND", "synthetic", { nextStep: "synthetic-hint" });
+        },
+      },
     });
     try {
       const error = await client.connect().catch((error: unknown) => error);
-      expect(error).toMatchObject({ code: "CONFIG_NOT_FOUND" });
-      expect(error).not.toHaveProperty("details.nextStep");
-      expect(JSON.stringify(error)).not.toContain("synthetic-hint");
+      expect(error).toMatchObject({
+        code: "CONFIG_NOT_FOUND",
+        details: { nextStep: "synthetic-hint" },
+      });
     } finally {
       await client.close();
     }

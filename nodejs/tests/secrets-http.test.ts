@@ -39,7 +39,11 @@ describe("secret isolation", () => {
     vi.stubEnv("SNOWFLAKE_SECRET_KEY_SECRET_STRING", " value \n");
     const client = createSarClient({
       secrets: { directory },
-      connectionOptions: createConnectionOptions([]),
+      connectionOptions: createConnectionOptions({
+        account: "test",
+        authenticator: "OAUTH",
+        token: "synthetic",
+      }),
     });
     const read = client.secrets.getString("KEY");
     expect(read).toBeInstanceOf(Promise);
@@ -105,14 +109,20 @@ describe("REST boundaries", () => {
     );
   });
   it("rejects caller authorization headers before acquiring credentials", async () => {
-    const resolve = vi.fn();
+    const readToken = vi.fn(() => "synthetic");
     const client = createSarClient({
-      connectionOptions: createConnectionOptions([{ id: "test", resolve }]),
+      connectionOptions: createConnectionOptions({
+        account: "test",
+        authenticator: "OAUTH",
+        get token() {
+          return readToken();
+        },
+      }),
     });
     await expect(client.fetch("/api", { headers: { authorization: "bad" } })).rejects.toMatchObject(
       { code: "INVALID_OPTIONS" },
     );
-    expect(resolve).not.toHaveBeenCalled();
+    expect(readToken).not.toHaveBeenCalled();
     await client.close();
   });
 });

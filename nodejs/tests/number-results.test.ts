@@ -18,7 +18,7 @@
 import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions, fromCredentials } from "../src/auth.js";
+import { createConnectionOptions } from "../src/auth.js";
 import { createConnectionManager } from "../src/connections.js";
 import { queryReference } from "../src/detached-options.js";
 import type { SarError } from "../src/errors.js";
@@ -32,13 +32,12 @@ import type { ColumnMetadata, QueryOptions, QueryReference, ResultOptions } from
 // text padded to its scale, FLOAT as the server's rounded text, which can use an exponent.
 
 function provider() {
-  return createConnectionOptions(
-    fromCredentials({
-      target: { account: "test" },
-      credential: { type: "oauth", token: "synthetic" },
-    }),
-    { environment: "local" },
-  );
+  return createConnectionOptions({
+    account: "test",
+    accessUrl: "https://test.snowflakecomputing.com",
+    authenticator: "OAUTH",
+    token: "synthetic",
+  });
 }
 function setup(fake: Parameters<typeof fakeDriver>[0] = {}, results?: ResultOptions) {
   const driver = fakeDriver(fake);
@@ -49,7 +48,7 @@ function setup(fake: Parameters<typeof fakeDriver>[0] = {}, results?: ResultOpti
 }
 function detachedSetup() {
   const service = fakeQueryService();
-  const options = async () => ({ account: "test", authenticator: "OAUTH", token: "synthetic" });
+  const options = () => ({ account: "test", authenticator: "OAUTH", token: "synthetic" });
   const connectionOptions = { getOwnerOptions: options, getCallerOptions: options };
   return {
     ...service,

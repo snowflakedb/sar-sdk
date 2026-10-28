@@ -44,8 +44,11 @@ JavaScript consumers need no TypeScript compiler. The tested driver is exactly 3
 
 ```ts
 import { createSarClient } from "@snowflake/sar-sdk";
+import { createConnectionOptions, fromDefault } from "@snowflake/sar-sdk/auth";
 
-const client = createSarClient();
+const client = createSarClient({
+  connectionOptions: createConnectionOptions(fromDefault()),
+});
 try {
   const result = await client.query("SELECT CURRENT_USER() AS USER_NAME");
   console.log(result.rows);
@@ -57,13 +60,20 @@ try {
 ## Common tasks
 
 Create one client per server process, reuse it across requests, and close it at shutdown.
-Frameworks that reload modules during development can keep it on `globalThis`:
+Frameworks that reload modules during development can keep it on `globalThis`. `fromDefault()`
+reads the platform's credentials when deployed and a SnowCLI profile locally
+([Configuration](#configuration)):
 
 ```ts
 import { createSarClient, type SarClient } from "@snowflake/sar-sdk";
+import { createConnectionOptions, fromDefault } from "@snowflake/sar-sdk/auth";
 
 const cache = globalThis as typeof globalThis & { snowflake?: SarClient };
-export const snowflake = (cache.snowflake ??= createSarClient());
+export const snowflake = (cache.snowflake ??= createSarClient({
+  connectionOptions: createConnectionOptions(fromDefault(), {
+    callerAsOwner: process.env.NODE_ENV === "development",
+  }),
+}));
 ```
 
 Run SQL as the app, passing values as binds rather than building SQL strings:
@@ -91,9 +101,9 @@ export async function GET(request: Request) {
 
 Caller queries use the user's default role and warehouse. Pass `warehouse` per query, or set
 `SNOWFLAKE_WAREHOUSE` in the app's environment, for users without a default warehouse.
-In recognized local development, a caller view without caller headers uses the app's identity. To
-run caller views as the app even when caller headers are present, such as in development, create
-the client with `callerAsOwner: process.env.NODE_ENV === "development"`.
+A caller view without caller headers throws `CALLER_CONTEXT_REQUIRED`. To run caller views as the
+app, such as in development, create the options with
+`createConnectionOptions(connection, { callerAsOwner: process.env.NODE_ENV === "development" })`.
 [Caller Context](#caller-context) describes both.
 
 Handle failures by their stable `code`. When Snowflake rejects a query, `details.errorCode` holds
@@ -136,13 +146,13 @@ Use only the layers you need. `createSarClient()` is a convenience aggregate of 
 same components, not a requirement for native driver access.
 
 ```ts
-import { createConnectionOptions } from "@snowflake/sar-sdk/auth";
+import { createConnectionOptions, fromToml } from "@snowflake/sar-sdk/auth";
 import { createConnectionManager } from "@snowflake/sar-sdk/connections";
 import { createQueryClient } from "@snowflake/sar-sdk/query";
 import { createFetchClient } from "@snowflake/sar-sdk/http";
 import { createSecrets } from "@snowflake/sar-sdk/secrets";
 
-const auth = createConnectionOptions();
+const auth = createConnectionOptions(fromToml({ name: "dev" }), { callerAsOwner: true });
 const connections = createConnectionManager(auth);
 const queries = createQueryClient(connections);
 const http = createFetchClient(auth);
@@ -163,7 +173,6 @@ try {
   const result = await queries.query("SELECT CURRENT_USER() AS USER_NAME");
 } finally {
   await Promise.all([queries.close(), connections.close(), http.close(), secrets.close()]);
-  await auth.close();
 }
 ```
 
@@ -171,27 +180,22 @@ The native callback must return a Promise and await all driver execution and str
 Returning `connection.execute(...)` directly is rejected: a Statement is not completion.
 The manager owns connections; query clients borrow their supplied manager. Closing a
 query client disposes only its work, not other clients' work or the manager. A supplied
-options provider is borrowed. Close it after its consumers. Use
+options provider holds no resources, so there is nothing to close. Use
 `createSarClient({ connectionOptions: auth })` for the aggregate over the same provider.
-Authentication/discovery and driver tuning belong to the factory, not to manager, query, or fetch
-options. Without `connectionOptions`, `createSarClient()` accepts them for the factory it creates
-and closes (see [Configuration](#configuration)); with it, configure the supplied provider instead.
+Without `connectionOptions`, work that needs a connection fails with `AUTH_NOT_FOUND`.
 
-`getOwnerOptions({ signal?, timeoutMs? })` and
-`getCallerOptions({ headers } | { token }, { signal?, timeoutMs? })` return fresh mutable
+`getOwnerOptions()` and `getCallerOptions(token)` synchronously return fresh mutable
 `snowflake-sdk` connection options. They do not log in or open SQL. Results contain secrets:
-never log, serialize, or return them to HTTP callers. `diagnostics()` does not acquire
-credentials. Factory `close()` aborts its waits, not native connections already created.
-Custom structural providers implement the same two getters; diagnostics are optional.
-They are trusted application code responsible for caller policy and redacted diagnostics.
+never log, serialize, or return them to HTTP callers. Custom structural providers implement the
+same two getters. They are trusted application code responsible for caller policy.
 
 ```ts
 import snowflake from "snowflake-sdk";
-const connection = snowflake.createConnection(await auth.getOwnerOptions());
+const connection = snowflake.createConnection(auth.getOwnerOptions());
 // The application connects, awaits native execution, and destroys the connection.
 ```
 
-`snowflake.createPool(await auth.getOwnerOptions(), { min: 0, max: 4 })` also works,
+`snowflake.createPool(auth.getOwnerOptions(), { min: 0, max: 4 })` also works,
 but captures one credential snapshot. It does not call the getter for future connections.
 Use the SDK manager or an application-owned resource factory for rotating login credentials.
 Native pools require application-owned identity isolation, reset, and `drain()` plus `clear()`
@@ -229,33 +233,34 @@ const id = await client
 such as `{ asCaller: true, headers }` throw `INVALID_OPTIONS`. Caller views cannot switch back to
 the app identity.
 
-SPCS and Serverless use separate adapters. SPCS composes the service and caller tokens;
-Serverless uses its ingress-provided caller OAuth credential directly. The Serverless
-mounted app credential may be an opaque static placeholder. The SDK never parses it as
-a JWT or assumes unchanged contents mean unchanged platform credentials.
+Caller options append the caller's token to the connection's `token` value:
+`getCallerOptions(token)` returns the owner options with `token` set to `<owner token>.<caller
+token>`. This works only for the authenticators whose login sends `token`: `OAUTH` and
+`PROGRAMMATIC_ACCESS_TOKEN`, as `fromPlatform()` provides. For any other authenticator, such as
+`SNOWFLAKE` with a password, key-pair or browser login, the driver ignores `token`, so the caller's
+identity would be dropped and the session would log in as the owner. `getCallerOptions()` and
+`asCaller()` throw `AUTH_NOT_SUPPORTED` for those, and for a connection with no `token`, unless the
+options were created with `callerAsOwner: true`. The SDK never parses either token as a JWT.
 
-By default (`callerFallback: "auto"`), missing caller context falls back to the app identity only
-in recognized local or Serverless preview execution. Platform credentials without preview evidence
-mean deployed mode. `NODE_ENV` alone is not local evidence. Trusted applications can specify
-`environment: "local"` when necessary, but not to override platform evidence: on the platform it
-throws `ENVIRONMENT_CONFLICT`. `"error"` requires callers everywhere. Set `callerFallback` on
-`createSarClient()` or the options factory; a refusal's `details.nextStep` suggests a fix.
-Present-but-empty headers and explicit empty tokens fail in every environment.
-Only source/platform metadata selects SPCS/Serverless composition; generic OAuth/PAT tokens
-do not acquire caller support merely by containing a token or being used on a platform.
+There is no fallback: a caller view without caller headers throws `CALLER_CONTEXT_REQUIRED`, and so
+do present-but-empty headers and explicit empty tokens. The SDK doesn't detect local development
+or the platform. Pass the connection options your environment needs.
 
-`callerAsOwner: true` runs every caller view as the app, even when caller context is present. Use
-it where caller's rights don't work for your app yet: on a local server, or in Snowflake Workspaces
-preview, which sends a valid caller token that doesn't behave as apps need. Caller views then use
-the app's credentials for queries, `withConnection`, and `fetch`, follow owner session rules
-instead of the caller-view reuse described below, and save `mode: "owner"` detached references.
-The factory's `getCallerOptions()` returns owner options, and `callerFallback` doesn't apply.
-Caller context is still validated, so malformed headers and empty tokens still fail. The SDK
-doesn't decide when to set it: pass your app's own condition, and change it once the platform
-supports what your app needs. Set it on `createSarClient()` or the options factory.
+`callerAsOwner: true`, an option of `createConnectionOptions()`, runs every caller view as the app,
+even when caller context is present or missing. Use it where caller's rights don't work for your
+app yet: on a local server, where your connection can't carry a caller's token, or in Snowflake
+Workspaces preview, which sends a valid caller token that doesn't behave as apps need. Caller views
+then use the app's credentials for queries, `withConnection`, and `fetch`, follow owner session
+rules instead of the caller-view reuse described below, and save `mode: "owner"` detached
+references. `getCallerOptions()` returns owner options. Present caller context is still validated,
+so malformed headers and empty tokens still fail. The SDK doesn't decide when to set it: pass your
+app's own condition, and change it once the platform supports what your app needs.
 
 ```ts
-const client = createSarClient({ callerAsOwner: process.env.NODE_ENV === "development" });
+const options = createConnectionOptions(connection, {
+  callerAsOwner: process.env.NODE_ENV === "development",
+});
+const client = createSarClient({ connectionOptions: options });
 ```
 
 A caller view reuses its sessions. Its first operation logs in, and later operations in the same
@@ -291,87 +296,64 @@ it, Snowflake refuses with error `003001` and the query keeps running; the SDK t
 
 ## Configuration
 
-Default factory discovery order is platform credentials, a complete environment identity, then
-the SnowCLI-compatible default profile. Selecting `connection.name`,
-`SNOWFLAKE_CONNECTION_NAME`, or `SNOWFLAKE_DEFAULT_CONNECTION_NAME` goes directly
-to that profile. A missing selected profile never selects the first entry.
+`createConnectionOptions(connection, { callerAsOwner? })` takes the Snowflake driver's connection
+options and nothing else, so your application chooses where they come from. Three helpers read
+common sources and return plain connection options:
 
-`createSarClient()` passes `connection`, `environment`, `platform`, `interactive`,
-`callerFallback`, `callerAsOwner`, `driverOptions`, and `logger` to the options factory it creates
-and closes, and `timeouts.authMs` as its `authTimeoutMs`. Combining them with `connectionOptions`
-throws `INVALID_OPTIONS`. For example, a development server that `npm run dev` starts without a
-terminal can select a profile, allow browser SSO, and run caller views as the app:
+- `fromDefault()` uses `fromPlatform()` when the service has mounted its token and `fromToml()`
+  otherwise, so the app needs no `NODE_ENV` check to pick a source. It takes no options: locally it
+  reads the default profile. To pick a profile or a source yourself, call `fromToml()` or
+  `fromPlatform()` directly.
+- `fromToml({ name?, configFile? })` reads a SnowCLI-compatible profile.
+- `fromPlatform()` reads the OAuth token a Snowflake-hosted service mounts at
+  `/snowflake/session/token`, the same on SPCS and Serverless, and the account and endpoint it sets
+  in `SNOWFLAKE_*` variables.
+
+Anything else is a literal object, such as options you assemble from your own environment variables.
+The usual arrangement reads the platform's credentials when deployed and a profile locally. Choosing
+whether caller views run as the app is still your decision:
 
 ```ts
-const client = createSarClient({
-  connection: { name: "dev", warehouse: "APP_WH" },
-  interactive: "always",
+import { createConnectionOptions, fromDefault } from "@snowflake/sar-sdk/auth";
+
+const options = createConnectionOptions(fromDefault(), {
   callerAsOwner: process.env.NODE_ENV === "development",
 });
-```
-
-For profiles, precedence is explicit SDK context, named environment overrides,
-profile values, then generic environment defaults. Explicit identity conflicts
-are rejected, not silently merged. `connections.toml` replaces connection
-definitions from `config.toml`. Both conventional top-level connection tables
-and nested `connections` tables are supported. Relative key/token paths resolve
-against the configuration directory, not the process working directory. This
-deliberate rule is not a claim of compatibility with every SnowCLI version.
-
-The resolver supports `SNOWFLAKE_HOME`, explicit `connection.configFile`,
-`~/.snowflake`, and documented macOS/Windows/Linux configuration directories.
-On POSIX, configuration files must be private (`0600`). It does not shell out to
-SnowCLI or other tools and does not read private credential caches. Other tools share these
-profiles, so the SDK skips profile keys it doesn't use, such as `oauth_enable_refresh_tokens`,
-instead of failing. Once an operation selects the profile, `diagnostics()` lists the skipped
-names, never their values, in `ignoredProfileKeys`, and the factory `logger` receives one
-`profile-keys-ignored` event with the same `keys`. A misspelled key is skipped too, so check that
-list when a profile setting has no effect. Keys the SDK uses are still type-checked, and unknown
-fields in `connection` options supplied in code still throw.
-Separate `region` is rejected; use a region-qualified account identifier or an
-explicit HTTPS endpoint. SDK options and provider registrations are snapshots.
-Profile/environment source resolution is retained, including failures; recreate the
-factory after changing that configuration. Use token files or a custom provider's
-`acquire()` for credentials that must rotate without client recreation.
-
-```ts
-import { createConnectionOptions, fromTokenFile, fromToml } from "@snowflake/sar-sdk/auth";
-
-const options = createConnectionOptions([
-  fromTokenFile({
-    id: "company",
-    path: "/run/company/token",
-    type: "oauth",
-    optional: true,
-    target: { account: "org-account" },
-  }),
-  fromToml({ name: "development", environmentOverrides: false }),
-]);
 const client = createSarClient({ connectionOptions: options });
 ```
 
-An array replaces defaults; `[]` disables discovery. Removing the standalone
-environment source does not remove profile overlays; set
-`fromToml({ environmentOverrides: false })` separately. A selected source stays
-selected after refresh or authentication failure. Providers returning
-`undefined` mean absence, not rejection. Custom providers are trusted code.
-Provider hook failures receive safe messages; sensitive diagnostics are retained only
-as `cause`. Do not serialize the cause or use provider IDs as untrusted display text.
+The SDK detects no environment or platform beyond `fromDefault()` checking for the mounted token,
+and consults no `SNOWFLAKE_*` variable except inside `fromPlatform()` and `SNOWFLAKE_HOME`, which
+locates the SnowCLI configuration directory. Every option the driver accepts belongs in the connection options, including proxy settings and
+credential caching. The SDK sets `application`, `clientSessionKeepAlive`, and
+`serverSessionKeepAlive` itself, and sets `accessUrl` from your account or host. Separate `region`
+is rejected; use a region-qualified account identifier or an explicit HTTPS endpoint. Inherited
+`sessionToken` and `masterToken` are rejected.
 
-Supported credentials include OAuth, PAT, password, key pairs, and selected
-driver-managed login flows. Interactive flows require recognized local
-execution and a terminal by default. `interactive: "never"` disables prompts;
-`"always"` permits a trusted local integration without a TTY, not a deployment
-or CI job. SDK-managed interactive/driver-flow logins are serialized; native consumers
-manage login concurrency themselves. Driver credential caching is opt-in
-through the profile/provider recipe or `driverOptions.clientStoreTemporaryCredential`;
-without caching, fresh sessions may require repeated login. The SDK does not cache SQL
-login tokens; its separate client-credentials secret cache is described below.
-Explicit factory caching options take precedence over profile/provider tuning.
-Driver-managed credential recipes are restricted by `DriverCredentialOptions`; this
-is not support for every driver authenticator or arbitrary connection option.
-Interactive-login and discovery failures carry a `details.nextStep` hint, which `toJSON()`
-includes; hints never contain file paths or credentials.
+`fromToml` supports `config.toml` and `connections.toml`, conventional top-level connection tables
+and nested `connections` tables, `SNOWFLAKE_HOME`, an explicit `configFile`, `~/.snowflake`, and
+documented macOS/Windows/Linux configuration directories. Without `name`, it reads the file's
+`default_connection_name`, then `default`. A missing profile throws `CONFIG_NOT_FOUND`; it never
+selects the first entry. `connections.toml` replaces connection definitions from `config.toml`.
+Relative key/token paths resolve against the configuration directory, not the process working
+directory. On POSIX, configuration files must be private (`0600`). It does not shell out to
+SnowCLI or other tools, does not read private credential caches, and applies no environment
+overrides. Other tools share these profiles, so keys the SDK doesn't use, such as
+`oauth_enable_refresh_tokens`, are dropped instead of failing; a misspelled key is dropped too.
+Keys the SDK uses are type-checked. A profile's `token_file_path` becomes a `token` that is read
+from the file each time options are requested.
+
+Options are read each time `getOwnerOptions()` or `getCallerOptions()` runs, so a `token` property
+that is a getter rotates without recreating anything. `fromPlatform()` and a profile's
+`token_file_path` return such a getter. A literal object's values are fixed: rebuild the options
+after changing them.
+
+Supported credentials are whatever the driver supports: OAuth, PAT, password, key pairs, and
+driver-managed login flows. Driver-managed interactive logins, such as `EXTERNALBROWSER`, open a
+browser, so use them only where one can open. The SDK serializes those logins; native consumers
+manage login concurrency themselves. The SDK does not cache SQL login tokens; its separate
+client-credentials secret cache is described below. Configuration failures carry a
+`details.nextStep` hint, which `toJSON()` includes; hints never contain file paths or credentials.
 
 ## Queries and Ownership
 
@@ -457,8 +439,8 @@ Configure `idleTimeoutMs`, `maxLifetimeMs`, and `resetTimeoutMs` only in reusabl
 Lifetime expiry retires a borrowed session on release; it does not interrupt its work.
 Local cleanup deadlines do not imply physical destruction: a pending driver destroy
 retains its physical slot until it settles. Shutdown can still report a deadline failure.
-Mounted credential rotation does not evict established sessions. New logins reopen
-token files/acquire current credentials; idle reuse does not acquire credentials again.
+Mounted credential rotation does not evict established sessions. New logins read
+the current token; idle reuse does not read credentials again.
 
 `query()` returns `{ rows, queryId, columns, rowCount }`, plus `affectedRows` when Snowflake
 reports a DML count: the rows inserted, updated, deleted, or merged, counting each updated row
@@ -742,12 +724,10 @@ restriction, and caller identity rules are unchanged.
 
 ## Diagnostics and Driver Injection
 
-`await client.diagnostics()` reports environment evidence, provider selection,
-and resource counts without acquiring credentials. It may invoke a supplied structural
-provider's optional diagnostic hook, which must also be redacted and non-authenticating.
-Without that hook, source information is unknown. Unprobed sources are not claimed to work.
+`await client.diagnostics()` reports the session mode and resource counts: active, queued, idle,
+and physical connections. It does not acquire credentials or open a connection.
 
-Pass a `logger` to `createSarClient()`, or to `createConnectionOptions()` for standalone
+Pass a `logger` to `createSarClient()`, or to `createConnectionManager()` for standalone
 components, to receive an event for each SQL login and query. For example, to print a line for
 each:
 
@@ -758,16 +738,12 @@ const client = createSarClient({
 ```
 
 - `session-opened`: a new SQL session logged in, with `mode` (`"owner"` or `"caller"`) and
-  `durationMs` from acquiring credentials through login. Reusing a session logs nothing.
+  `durationMs` from reading credentials through login. Reusing a session logs nothing.
 - `query-succeeded`: a statement finished, with `queryId`, `durationMs`, and `rowCount`, the number
   of rows returned. `stream()` and `streamQuery()` log it when they return the stream, without
   `rowCount`.
 - `query-failed`: the operation failed, with `code`, the SDK error code; `errorCode`, Snowflake's
   numeric error code, when it reported one; `queryId` when known; and `durationMs`.
-- `caller-fallback`: a caller view without caller context used owner credentials. It's logged once
-  per factory, with `environment`.
-- `profile-keys-ignored`: the selected connection profile has keys the SDK doesn't use, with their
-  names in `keys`.
 
 Query events come from `query()`, `stream()`, `tx.query()`, `pollQuery()`, `streamQuery()`, and
 `submit()` handles, whose `result()` logs success. `durationMs` is whole milliseconds since the
@@ -817,24 +793,24 @@ one transaction.
 
 ## API at a glance
 
-| API                                                         | Contract                                                     |
-| ----------------------------------------------------------- | ------------------------------------------------------------ |
-| `createSarClient(options?)`                                 | Synchronous lazy factory                                     |
-| `client.connect()`                                          | Temporary owned-session readiness check                      |
-| `client.query<Row>(sql, options?)`                          | Materialized rows, query ID, columns, returned-row count     |
-| `client.submit<Row>(sql, options?)`                         | Process-local handle; `status()`, `result()`, `cancel()`     |
-| `client.stream<Row>(sql, options?)`                         | Single-consumer async iterable; explicit `close()`           |
-| `client.transaction(callback, options?)`                    | One session; serialized `tx.query()`; COMMIT or ROLLBACK     |
-| `client.asCaller({ headers })` or `({ token })`             | Immutable request-scoped subset                              |
-| `client.withConnection(callback)`                           | Awaited raw-driver callback and automatic disposal           |
-| `client.asCaller({ headers }).withConnection(callback)`     | Raw-driver callback with the caller's identity               |
-| `client.secrets.getString/getPassword/getAccessToken(name)` | Async mount/environment/provider resolution                  |
-| `client.fetch(path, init?)`                                 | Account-relative authenticated HTTP; caller owns body        |
-| `client.diagnostics()`                                      | Async evidence/selection/budget snapshot, not a health probe |
-| `client.close({ timeoutMs }?)`                              | Idempotent stop-admission, SQL grace period, cleanup         |
+| API                                                         | Contract                                                   |
+| ----------------------------------------------------------- | ---------------------------------------------------------- |
+| `createSarClient(options?)`                                 | Synchronous lazy factory                                   |
+| `client.connect()`                                          | Temporary owned-session readiness check                    |
+| `client.query<Row>(sql, options?)`                          | Materialized rows, query ID, columns, returned-row count   |
+| `client.submit<Row>(sql, options?)`                         | Process-local handle; `status()`, `result()`, `cancel()`   |
+| `client.stream<Row>(sql, options?)`                         | Single-consumer async iterable; explicit `close()`         |
+| `client.transaction(callback, options?)`                    | One session; serialized `tx.query()`; COMMIT or ROLLBACK   |
+| `client.asCaller({ headers })` or `({ token })`             | Immutable request-scoped subset                            |
+| `client.withConnection(callback)`                           | Awaited raw-driver callback and automatic disposal         |
+| `client.asCaller({ headers }).withConnection(callback)`     | Raw-driver callback with the caller's identity             |
+| `client.secrets.getString/getPassword/getAccessToken(name)` | Async mount/environment/provider resolution                |
+| `client.fetch(path, init?)`                                 | Account-relative authenticated HTTP; caller owns body      |
+| `client.diagnostics()`                                      | Async session mode and resource counts, not a health probe |
+| `client.close({ timeoutMs }?)`                              | Idempotent stop-admission, SQL grace period, cleanup       |
 
-Root exports include SDK types and `SarError`/`isSarError`. `/auth` exports provider
-helpers and credential types; `/driver` exposes Node-driver integration types.
+Root exports include SDK types and `SarError`/`isSarError`. `/auth` exports
+`createConnectionOptions`, `fromDefault`, `fromToml`, `fromPlatform`, and `getCallerUserToken`; `/driver` exposes Node-driver integration types.
 No internal file path is a supported import. Source JSDoc and declarations are the
 API reference; internal files and test fixtures may change without compatibility guarantees.
 

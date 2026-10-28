@@ -33,8 +33,8 @@ afterEach(() => {
 function setup() {
   const service = fakeQueryService();
   let token = "synthetic-first";
-  const owner = vi.fn(async () => ({ account: "test", authenticator: "OAUTH", token }));
-  const caller = vi.fn(async () => ({
+  const owner = vi.fn(() => ({ account: "test", authenticator: "OAUTH", token }));
+  const caller = vi.fn(() => ({
     account: "test",
     authenticator: "OAUTH",
     token: `caller-${token}`,
@@ -421,7 +421,7 @@ describe("a complete stream owns its lookup connection", () => {
     expect(await first.next()).toEqual({ done: false, value: { VALUE: "2" } });
     expect(await first.next()).toEqual({ done: true, value: undefined });
     await expect(collect(stream)).rejects.toMatchObject({ code: "INVALID_OPTIONS" });
-    await expectReleased(client);
+    await expectReleasedAfterExhaustion(client);
     expectDetachedCleanup(connections);
     await client.close();
   });
@@ -481,9 +481,9 @@ describe("streamQuery fails like pollQuery before returning a stream", () => {
     await expect(
       client.asCaller({ token: "second" }).streamQuery(ownerReference),
     ).rejects.toMatchObject({ code: "QUERY_IDENTITY_MISMATCH" });
-    await expect(
-      client.asCaller({ headers: new Headers() }).streamQuery(callerReference),
-    ).rejects.toMatchObject({ code: "CALLER_CONTEXT_REQUIRED" });
+    expect(() => client.asCaller({ headers: new Headers() })).toThrow(
+      expect.objectContaining({ code: "CALLER_CONTEXT_REQUIRED" }),
+    );
     expect(connections).toHaveLength(2);
     queries.get(callerReference.queryId)!.status = "SUCCESS";
     const stream = streamOf(await client.asCaller({ token: "third" }).streamQuery(callerReference));

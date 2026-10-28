@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inspect } from "node:util";
 import { EnvHttpProxyAgent } from "undici";
 import { createSarClient, SarError, type FetchInit, type SarClientOptions } from "../src/index.js";
-import { createConnectionOptions, type AuthProvider } from "../src/auth.js";
+import { createConnectionOptions } from "../src/auth.js";
 import { createFetchClient } from "../src/account-http.js";
 import { HttpTransport } from "../src/http.js";
 
@@ -56,19 +56,11 @@ function observe(promise: Promise<unknown>) {
 }
 
 function provider() {
-  const source: AuthProvider = {
-    id: "synthetic",
-    async resolve() {
-      return {
-        target: { account: "test" },
-        platform: "serverless",
-        async acquire() {
-          return { type: "oauth", token: "synthetic-app-token" };
-        },
-      };
-    },
-  };
-  return createConnectionOptions([source], { environment: "deployed", platform: "serverless" });
+  return createConnectionOptions({
+    account: "test",
+    authenticator: "OAUTH",
+    token: "synthetic-app-token",
+  });
 }
 
 /** Resolves once the request reaches undici. Headers never arrive. */
@@ -290,11 +282,16 @@ describe("deadline validation", () => {
   });
 
   it.each(invalid)("rejects timeoutMs %o before acquiring credentials", async (timeoutMs) => {
-    const resolve = vi.fn();
-    const client = createSarClient({
-      connectionOptions: createConnectionOptions([{ id: "synthetic", resolve }]),
+    const readToken = vi.fn(() => "synthetic-token");
+    const connectionOptions = createConnectionOptions({
+      account: "test",
+      authenticator: "OAUTH",
+      get token() {
+        return readToken();
+      },
     });
-    const standalone = createFetchClient(createConnectionOptions([{ id: "synthetic", resolve }]));
+    const client = createSarClient({ connectionOptions });
+    const standalone = createFetchClient(connectionOptions);
     try {
       const init = { timeoutMs } as unknown as FetchInit;
       for (const scope of [client, client.asCaller({ token: "synthetic-caller" }), standalone])
@@ -302,7 +299,7 @@ describe("deadline validation", () => {
           code: "INVALID_OPTIONS",
           message: expect.stringMatching(/^timeoutMs /),
         });
-      expect(resolve).not.toHaveBeenCalled();
+      expect(readToken).not.toHaveBeenCalled();
       expect(transport.fetch).not.toHaveBeenCalled();
     } finally {
       await Promise.all([client.close(), standalone.close()]);

@@ -25,17 +25,18 @@ This page covers the Node.js SDK. To report a vulnerability, follow the
 - Application configuration and providers are trusted server code. They are not a
   sandbox for untrusted plugins and must never be constructed from request-supplied targets.
 - Caller headers must come from trusted Snowflake ingress. Extraction is not authentication.
-  Missing callers can fall back only in recognized local/preview execution; blank or rejected
-  credentials do not fall back. Set factory `callerFallback: "error"` for strict operation.
-  `callerAsOwner: true` runs every caller view with the app's rights, even with caller context
-  present; enable it only where every user may act as the app, such as local development.
+  A caller view without caller context, or with a blank token, is rejected; nothing falls back to
+  the app's credentials. `callerAsOwner: true`, an option of `createConnectionOptions()`, runs
+  every caller view with the app's rights, even with caller context present or missing; enable it
+  only where every user may act as the app, such as local development.
 - Caller views are request-scoped and cannot expose app secrets or shut down the parent.
   The application must still enforce its authorization policy; Snowflake enforces SQL rights.
 - Detached query references are unsigned server-side metadata, not access tokens. Never
   accept a reference directly from a browser: load a trusted shared record by query ID
   and verify application, authenticated subject, mode, decoder policy, and expiry.
   SDK lookup also verifies the current Snowflake organization/account, user, active role,
-  and owner/caller mode. Detached caller operations never use local/preview owner fallback.
+  and owner/caller mode. Detached caller operations never switch to owner credentials unless the
+  connection options were explicitly created with `callerAsOwner: true`.
   Fresh authentication does not retroactively re-evaluate every policy on cached results.
 - Sessions are not pooled across callers. Do not retain, share, or destroy connections
   passed to `withConnection`, or borrow another client's session/master tokens.
@@ -46,6 +47,8 @@ This page covers the Node.js SDK. To report a vulnerability, follow the
 - Connection-options getters intentionally return credentials to trusted server code.
   Never serialize their results, persist them, or return them to an HTTP caller.
   Custom structural providers own their caller/credential policy; they are not sandboxed.
+  Errors thrown by custom providers can preserve their message and `SarError.details`, including
+  `nextStep`; keep these values free of secrets and paths before they reach logs or responses.
   Native pools capture snapshots and do not refresh them for future connections.
 - Relative account HTTP paths, managed auth headers, and rejected redirects protect
   account scoping. A configured OAuth secret endpoint is trusted application configuration.

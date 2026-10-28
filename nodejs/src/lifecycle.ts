@@ -16,9 +16,22 @@
  */
 
 import { SarError, fail } from "./errors.js";
+import type { LogEvent } from "./types.js";
 
 export function checkAbort(signal?: AbortSignal): void {
   if (signal?.aborted) throw new SarError("ABORTED", "Operation aborted");
+}
+
+/** Wraps a logger to ignore its exceptions and rejections. */
+export function safeLogger(logger: unknown): ((event: LogEvent) => void) | undefined {
+  if (typeof logger !== "function") return undefined;
+  return (event) => {
+    try {
+      void Promise.resolve((logger as (event: LogEvent) => void)(event)).catch(() => {});
+    } catch {
+      /* Logging cannot change an operation. */
+    }
+  };
 }
 
 /** Whole milliseconds since a performance.now() reading. */

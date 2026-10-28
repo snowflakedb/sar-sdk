@@ -16,15 +16,15 @@
  */
 
 import {
-  createConnectionOptions,
   snapshotProvider,
+  unconfiguredOptions,
   optionsScope,
   type ConnectionOptionsProvider,
 } from "./auth-client.js";
 import { endpoint } from "./config.js";
 import { duration, fail, isSarError, keys, SarError, signalOption } from "./errors.js";
 import { HttpTransport, relativeAccountUrl } from "./http.js";
-import { checkAbort, deadline } from "./lifecycle.js";
+import { checkAbort } from "./lifecycle.js";
 import { clientOptions } from "./options.js";
 import type {
   CallerContext,
@@ -40,8 +40,7 @@ export function createFetchClient(
 ): FetchClient {
   keys(input, ["timeouts"], "fetch client");
   const options = clientOptions(input);
-  const owned = provider === undefined ? createConnectionOptions() : undefined;
-  const auth = snapshotProvider(provider ?? owned!);
+  const auth = snapshotProvider(provider ?? unconfiguredOptions);
   const http = new HttpTransport(options.timeouts?.httpMs);
   const shutdown = new AbortController();
   let closed = false;
@@ -73,13 +72,7 @@ export function createFetchClient(
             fail("INVALID_OPTIONS", "timeoutMs must be an integer");
           checkAbort(init.signal ?? undefined);
           const signal = AbortSignal.any([shutdown.signal, ...(init.signal ? [init.signal] : [])]);
-          const resolved = await deadline(
-            credentials.acquire({ signal, timeoutMs: options.timeouts?.authMs ?? 120_000 }),
-            options.timeouts?.authMs ?? 120_000,
-            signal,
-            "REST credentials",
-          );
-          assertOpen();
+          const resolved = credentials.options();
           const authenticator = resolved.authenticator?.toUpperCase();
           if (
             !["OAUTH", "PROGRAMMATIC_ACCESS_TOKEN"].includes(authenticator ?? "") ||
@@ -115,7 +108,7 @@ export function createFetchClient(
       if (closing) return closing;
       closed = true;
       shutdown.abort();
-      closing = Promise.all([http.close(), owned?.close()]).then(() => {});
+      closing = http.close();
       return closing;
     },
   });

@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-import { createConnectionOptions, snapshotProvider } from "./auth-client.js";
+import { snapshotProvider, unconfiguredOptions } from "./auth-client.js";
 import { callerToken } from "./caller.js";
 import { createConnectionManager } from "./connections.js";
 import { createFetchClient } from "./fetch-client.js";
@@ -34,25 +34,12 @@ import type {
 /** Convenient aggregate of the independently usable SAR components. */
 export function createSarClient(input: SarClientOptions = {}): SarClient {
   const options = clientOptions(input);
-  const owned =
-    options.connectionOptions === undefined
-      ? createConnectionOptions(undefined, {
-          connection: options.connection,
-          environment: options.environment,
-          platform: options.platform,
-          interactive: options.auth?.interactive,
-          callerFallback: options.auth?.callerFallback,
-          callerAsOwner: options.auth?.callerAsOwner,
-          authTimeoutMs: options.timeouts?.authMs,
-          driverOptions: options.driverOptions,
-          logger: options.logger,
-        })
-      : undefined;
-  const auth = snapshotProvider(options.connectionOptions ?? owned!);
+  const auth = snapshotProvider(options.connectionOptions ?? unconfiguredOptions);
   const connections = createConnectionManager(auth, {
     pool: options.pool,
     timeouts: options.timeouts,
     driver: options.driver,
+    logger: options.logger,
   });
   const queries = createQueryClient(connections, {
     results: options.results,
@@ -114,7 +101,6 @@ export function createSarClient(input: SarClientOptions = {}): SarClient {
           connections.close(settings),
           queries.close(settings),
         ]);
-        await owned?.close();
         const failure = results.find((result) => result.status === "rejected");
         if (failure?.status === "rejected") throw failure.reason;
       })();

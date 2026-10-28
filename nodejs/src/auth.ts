@@ -15,28 +15,11 @@
  * limitations under the License.
  */
 
-export {
-  authProviderIds,
-  fromCredentials,
-  fromTokenFile,
-  fromToml,
-  fromEnvironment,
-  fromPlatform,
-  getCallerUserToken,
-} from "./auth-manager.js";
-export type {
-  AuthContext,
-  AuthProvider,
-  Credential,
-  CredentialSource,
-  DriverCredentialOptions,
-} from "./auth-manager.js";
+export { getCallerUserToken } from "./caller.js";
+export { fromDefault, fromToml, fromPlatform } from "./sources.js";
 export { createConnectionOptions } from "./auth-client.js";
 export type {
-  AcquireOptions,
   ConnectionOptionsFactoryOptions,
-  ConnectionOptionsFactory,
   ConnectionOptionsProvider,
-  ConnectionOptionsDiagnostics,
   NativeConnectionOptions,
 } from "./auth-client.js";

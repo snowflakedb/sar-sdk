@@ -27,11 +27,13 @@ import {
   type Transaction,
   type TransactionQueryOptions,
 } from "../../src/index.js";
-import { createConnectionOptions, fromTokenFile } from "../../src/auth.js";
+import { createConnectionOptions, fromDefault, fromPlatform, fromToml } from "../../src/auth.js";
 const client: SarClient = createSarClient({
-  connectionOptions: createConnectionOptions([
-    fromTokenFile({ id: "custom", path: "/test-only/token", type: "oauth" }),
-  ]),
+  connectionOptions: createConnectionOptions({
+    account: "test",
+    authenticator: "OAUTH",
+    token: "synthetic",
+  }),
 });
 const result: Promise<QueryResult<{ ID: string }>> = client.query<{ ID: string }>(
   "SELECT ID FROM ITEMS",
@@ -46,6 +48,7 @@ function resultTypes(completed: QueryResult) {
 }
 void resultTypes;
 const counted: Promise<QueryResult<{ TOTAL: number }>> = createSarClient({
+  connectionOptions: createConnectionOptions(fromToml({ name: "dev" })),
   results: { numbers: "number" },
 }).query<{ TOTAL: number }>("SELECT COUNT(*) AS TOTAL FROM ITEMS");
 void counted;
@@ -101,7 +104,7 @@ import { createConnectionManager } from "../../src/connections.js";
 import { createQueryClient } from "../../src/queries.js";
 import { createFetchClient, type FetchInit as HttpFetchInit } from "../../src/account-http.js";
 import { createSecrets } from "../../src/secret-client.js";
-const auth = createConnectionOptions();
+const auth = createConnectionOptions(fromPlatform());
 const manager = createConnectionManager(auth, {
   pool: { mode: "reusable", reset: async () => {} },
 });
@@ -114,11 +117,11 @@ scopedQueries.asCaller({ token: "other" });
 // @ts-expect-error Native caller views cannot close their manager.
 manager.asCaller({ token: "synthetic" }).close();
 // @ts-expect-error Reusable mode requires reset.
-createConnectionManager(undefined, { pool: { mode: "reusable" } });
+createConnectionManager(auth, { pool: { mode: "reusable" } });
 // @ts-expect-error Reset is asynchronous.
-createConnectionManager(undefined, { pool: { mode: "reusable", reset: () => undefined } });
+createConnectionManager(auth, { pool: { mode: "reusable", reset: () => undefined } });
 // @ts-expect-error Isolated mode cannot configure reset.
-createConnectionManager(undefined, { pool: { mode: "isolated", reset: async () => {} } });
+createConnectionManager(auth, { pool: { mode: "isolated", reset: async () => {} } });
 // @ts-expect-error Native callbacks must await driver work.
 manager.withConnection((connection) => connection.execute({ sqlText: "SELECT 1" }));
 // @ts-expect-error Manager caller identity comes from asCaller(context).
@@ -132,45 +135,58 @@ const secret: Promise<string> = createSecrets().getString("KEY");
 void standaloneResponse;
 void secret;
 import snowflake from "snowflake-sdk";
-void auth.getOwnerOptions().then((options) => snowflake.createConnection(options));
-void auth
-  .getCallerOptions({ headers: new Headers() })
-  .then((options) => snowflake.createPool(options, { min: 0, max: 2 }));
-// @ts-expect-error Native factories require awaited options, not the getter Promise.
-snowflake.createConnection(auth.getOwnerOptions());
-// @ts-expect-error Discovery configuration belongs to the options factory.
+const ownerOptions: snowflake.ConnectionOptions = auth.getOwnerOptions();
+snowflake.createConnection(ownerOptions);
+snowflake.createPool(auth.getCallerOptions("synthetic"), { min: 0, max: 2 });
+// @ts-expect-error The caller's token is a string, not caller context.
+auth.getCallerOptions({ headers: new Headers() });
+// @ts-expect-error Options are returned synchronously, not as a Promise.
+void auth.getOwnerOptions().then((options) => options);
+// @ts-expect-error The provider has no resources to close.
+void auth.close();
+// @ts-expect-error Discovery configuration belongs to the application, not the client.
 createSarClient({ auth: { providers: [] } });
 // @ts-expect-error Removed pre-release resolver injection has no compatibility alias.
 createSarClient({ authResolver: auth });
 const ownedFactoryClient: SarClient = createSarClient({
-  connection: { name: "dev", warehouse: "APP_WH" },
-  environment: "auto",
-  platform: "auto",
-  interactive: "always",
-  callerFallback: "error",
-  callerAsOwner: process.env.NODE_ENV === "development",
-  driverOptions: { clientStoreTemporaryCredential: true },
+  connectionOptions: createConnectionOptions(
+    process.env.NODE_ENV === "development"
+      ? fromToml({ name: "dev", configFile: "/test-only/connections.toml" })
+      : fromPlatform(),
+    { callerAsOwner: process.env.NODE_ENV === "development" },
+  ),
   logger: (event) => void event.event,
-  timeouts: { authMs: 30_000 },
 });
 void ownedFactoryClient;
-void createSarClient({ connectionOptions: undefined, callerFallback: "error" });
-void createSarClient({ connectionOptions: auth, interactive: undefined });
-void createConnectionOptions(undefined, { callerFallback: "auto", callerAsOwner: true });
-// @ts-expect-error A supplied provider owns its connection and authentication settings.
-createSarClient({ connectionOptions: auth, interactive: "always" });
-// @ts-expect-error A supplied provider owns its caller policy.
+void createSarClient({ connectionOptions: undefined });
+// @ts-expect-error The SDK no longer opens connections from a profile name.
+createSarClient({ connection: { name: "dev", warehouse: "APP_WH" } });
+// @ts-expect-error The SDK no longer detects its environment.
+createSarClient({ environment: "auto" });
+// @ts-expect-error The SDK no longer detects its platform.
+createSarClient({ platform: "auto" });
+// @ts-expect-error The SDK no longer authenticates interactively.
+createSarClient({ interactive: "always" });
+// @ts-expect-error The caller fallback policy is gone.
+createSarClient({ callerFallback: "error" });
+// @ts-expect-error callerAsOwner is an option of createConnectionOptions.
 createSarClient({ connectionOptions: auth, callerAsOwner: true });
+// @ts-expect-error Driver options belong in the native connection options.
+createSarClient({ driverOptions: { clientStoreTemporaryCredential: true } });
+// @ts-expect-error There is no client-level authentication deadline.
+createSarClient({ timeouts: { authMs: 30_000 } });
+// @ts-expect-error The factory takes explicit connection options, not undefined.
+createConnectionOptions(undefined);
+void createConnectionOptions({ account: "test" }, { callerAsOwner: true });
 // @ts-expect-error The app passes a boolean condition, not an environment name.
-createSarClient({ callerAsOwner: "development" });
-// @ts-expect-error The removed "unless-deployed" policy has no compatibility alias.
-createConnectionOptions(undefined, { callerFallback: "unless-deployed" });
-// @ts-expect-error A supplied provider owns its default SQL context.
-createSarClient({ connectionOptions: auth, connection: { warehouse: "APP_WH" } });
-// @ts-expect-error The aggregate sets the factory deadline with timeouts.authMs.
-createSarClient({ authTimeoutMs: 30_000 });
-// @ts-expect-error Unknown caller fallback policy.
-createSarClient({ callerFallback: "always" });
+createConnectionOptions({ account: "test" }, { callerAsOwner: "development" });
+// @ts-expect-error The removed caller fallback policy has no compatibility alias.
+createConnectionOptions({ account: "test" }, { callerFallback: "unless-deployed" });
+// @ts-expect-error The platform source takes no options; SPCS and Serverless mount the same token.
+fromPlatform({ platform: "spcs" });
+createConnectionOptions(fromDefault(), { callerAsOwner: true });
+// @ts-expect-error The default source takes no options; call fromToml({ name }) to pick a profile.
+fromDefault({ name: "dev" });
 // @ts-expect-error Native connection options are not a provider.
 createConnectionManager({ account: "test" });
 

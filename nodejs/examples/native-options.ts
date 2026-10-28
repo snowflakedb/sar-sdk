@@ -16,7 +16,12 @@
  */
 
 import snowflake from "snowflake-sdk";
-import { createConnectionOptions, fromToml } from "@snowflake/sar-sdk/auth";
+import {
+  createConnectionOptions,
+  fromPlatform,
+  fromToml,
+  getCallerUserToken,
+} from "@snowflake/sar-sdk/auth";
 import type { Connection } from "@snowflake/sar-sdk/driver";
 
 function execute(connection: Connection): Promise<void> {
@@ -33,38 +38,31 @@ function execute(connection: Connection): Promise<void> {
 
 /** Direct native-driver lifecycle; no SDK result conversion or query limits. */
 export async function nativeOptionsExample(headers: Headers): Promise<void> {
-  const options = createConnectionOptions();
-  let connection: Connection | undefined;
+  const options = createConnectionOptions(fromPlatform());
+  const callerToken = getCallerUserToken(headers);
+  if (!callerToken) throw new Error("The request carries no caller token");
+  // The native options contain credentials; keep them out of logs and responses.
+  const connection: Connection = snowflake.createConnection(options.getCallerOptions(callerToken));
   try {
-    connection = snowflake.createConnection(await options.getCallerOptions({ headers }));
     await new Promise<void>((resolve, reject) => {
-      connection!.connect((error) => (error ? reject(error) : resolve()));
+      connection.connect((error) => (error ? reject(error) : resolve()));
     });
     await execute(connection);
   } finally {
-    try {
-      if (connection)
-        await new Promise<void>((resolve, reject) => {
-          connection!.destroy((error) => (error ? reject(error) : resolve()));
-        });
-    } finally {
-      await options.close();
-    }
+    await new Promise<void>((resolve, reject) => {
+      connection.destroy((error) => (error ? reject(error) : resolve()));
+    });
   }
 }
 
 /** A native pool captures one snapshot. Not a rotation-aware long-lived pool. */
 export async function nativePoolExample(): Promise<void> {
   const options = createConnectionOptions(fromToml({ name: "development" }));
+  const pool = snowflake.createPool(options.getOwnerOptions(), { min: 0, max: 2 });
   try {
-    const pool = snowflake.createPool(await options.getOwnerOptions(), { min: 0, max: 2 });
-    try {
-      await pool.use(execute);
-    } finally {
-      await pool.drain();
-      await pool.clear();
-    }
+    await pool.use(execute);
   } finally {
-    await options.close();
+    await pool.drain();
+    await pool.clear();
   }
 }

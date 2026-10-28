@@ -21,7 +21,7 @@ import os from "node:os";
 import path from "node:path";
 import { createConnectionManager } from "../src/connections.js";
 import { createQueryClient } from "../src/queries.js";
-import { createConnectionOptions, fromTokenFile } from "../src/auth.js";
+import { createConnectionOptions, fromToml } from "../src/auth.js";
 import { SessionStore } from "../src/session-store.js";
 import type { ConnectionManagerOptions, PoolOptions } from "../src/types.js";
 import { fakeDriver } from "./fake-driver.js";
@@ -42,21 +42,17 @@ function setup(
   fakeOptions: Parameters<typeof fakeDriver>[0] = {},
 ) {
   let token = "synthetic-first";
-  const acquired = vi.fn(async () => ({ type: "oauth" as const, token }));
+  const acquired = vi.fn(() => token);
   const reset = vi.fn(async () => {});
   const fake = fakeDriver(fakeOptions);
   const manager = createConnectionManager(
-    createConnectionOptions(
-      [
-        {
-          id: "test",
-          async resolve() {
-            return { target: { account: "test" }, platform: "spcs", acquire: acquired };
-          },
-        },
-      ],
-      { environment: "deployed", platform: "spcs" },
-    ),
+    createConnectionOptions({
+      account: "test",
+      authenticator: "OAUTH",
+      get token() {
+        return acquired();
+      },
+    }),
     {
       driver: fake.driver,
       pool: { mode: "reusable", reset, ...pool },
@@ -120,19 +116,7 @@ describe("bounded session reuse", () => {
       },
     };
     const manager = createConnectionManager(
-      createConnectionOptions([
-        {
-          id: "test",
-          async resolve() {
-            return {
-              target: { account: "test" },
-              async acquire() {
-                return { type: "oauth", token: "synthetic" };
-              },
-            };
-          },
-        },
-      ]),
+      createConnectionOptions({ account: "test", authenticator: "OAUTH", token: "synthetic" }),
       { driver: fake.driver, pool },
     );
     pool.reset = async () => {
@@ -202,16 +186,17 @@ describe("bounded session reuse", () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "sar-rotation-"));
     const filename = path.join(directory, "token");
     await writeFile(filename, "synthetic-old");
-    const fake = fakeDriver();
-    const manager = createConnectionManager(
-      createConnectionOptions([
-        fromTokenFile({ id: "test", path: filename, type: "oauth", target: { account: "test" } }),
-      ]),
-      {
-        driver: fake.driver,
-        pool: { mode: "reusable", reset: async () => {}, maxConnections: 2 },
-      },
+    const configFile = path.join(directory, "connections.toml");
+    await writeFile(
+      configFile,
+      `[default]\naccount = "test"\nauthenticator = "oauth"\ntoken_file_path = '${filename}'\n`,
+      { mode: 0o600 },
     );
+    const fake = fakeDriver();
+    const manager = createConnectionManager(createConnectionOptions(fromToml({ configFile })), {
+      driver: fake.driver,
+      pool: { mode: "reusable", reset: async () => {}, maxConnections: 2 },
+    });
     try {
       const first = await manager.withConnection(async (connection) => connection);
       await writeFile(filename, "synthetic-new");

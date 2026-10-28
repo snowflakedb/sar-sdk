@@ -22,11 +22,9 @@ export type SarErrorCode =
   | "CONFIG_INVALID"
   | "AUTH_NOT_FOUND"
   | "AUTH_FAILED"
-  | "AUTH_INTERACTION_REQUIRED"
   | "AUTH_NOT_SUPPORTED"
   | "AUTH_NOT_SUPPORTED_FOR_REST"
   | "CALLER_CONTEXT_REQUIRED"
-  | "ENVIRONMENT_CONFLICT"
   | "CLIENT_CLOSED"
   | "QUEUE_FULL"
   | "TIMEOUT"
@@ -86,16 +84,13 @@ export function fail(code: SarErrorCode, message: string): never {
   throw new SarError(code, message);
 }
 
-/** SDK-written `details.nextStep` values. They never include paths, SQL, or credentials. */
+/** Built-in SDK hints for `details.nextStep`; custom error details aren't rewritten. */
 export const nextSteps = Object.freeze({
-  ingress: "Send requests through Snowflake ingress so they carry caller context.",
-  callerFallback:
-    "Send requests through Snowflake ingress so they carry caller context, or set callerAsOwner: true in local development to run caller views with owner credentials.",
-  interaction:
-    'Run from a terminal, use a non-interactive credential, or set interactive: "always" for a local development server started without one.',
-  nonInteractive: "Run from a terminal or use a non-interactive credential.",
-  discovery:
-    "Configure a SnowCLI connection, or select an existing one with SNOWFLAKE_CONNECTION_NAME or connection: { name }.",
+  callerContext:
+    "Send requests through Snowflake ingress so they carry caller context, or set callerAsOwner: true to run caller views with owner credentials.",
+  callerToken:
+    "Use an OAUTH or PROGRAMMATIC_ACCESS_TOKEN connection with a token field, or set callerAsOwner: true to run caller views with owner credentials.",
+  discovery: "Configure a SnowCLI connection, or select an existing one with fromToml({ name }).",
   configFile:
     "Point configFile at an existing file, or omit it to use the SnowCLI configuration directory.",
   callerCancel:

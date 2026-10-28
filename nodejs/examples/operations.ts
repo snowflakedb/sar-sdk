@@ -16,14 +16,13 @@
  */
 
 import type { SarClient } from "@snowflake/sar-sdk";
-import { fromTokenFile, type AuthProvider } from "@snowflake/sar-sdk/auth";
+import { createConnectionOptions, fromDefault } from "@snowflake/sar-sdk/auth";
+import type { ConnectionOptionsProvider } from "@snowflake/sar-sdk/auth";
 
-export function tokenProvider(): AuthProvider {
-  return fromTokenFile({
-    id: "deployment",
-    path: "/run/company/snowflake-token",
-    type: "oauth",
-    target: { account: "org-account" },
+/** The platform's credentials when deployed, else a SnowCLI profile; the app decides who callers run as. */
+export function optionsProvider(): ConnectionOptionsProvider {
+  return createConnectionOptions(fromDefault(), {
+    callerAsOwner: process.env.NODE_ENV === "development",
   });
 }
 

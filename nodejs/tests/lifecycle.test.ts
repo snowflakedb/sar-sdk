@@ -19,7 +19,7 @@ import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Budget, deadline } from "../src/lifecycle.js";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions, fromCredentials } from "../src/auth.js";
+import { createConnectionOptions } from "../src/auth.js";
 import { fakeDriver } from "./fake-driver.js";
 import type { SarClientOptions } from "../src/types.js";
 
@@ -43,15 +43,11 @@ function setup(
     ...fake,
     client: createSarClient({
       driver: fake.driver,
-      connectionOptions: createConnectionOptions(
-        [
-          fromCredentials({
-            target: { account: "test" },
-            credential: { type: "oauth", token: "synthetic" },
-          }),
-        ],
-        { environment: "local" },
-      ),
+      connectionOptions: createConnectionOptions({
+        account: "test",
+        authenticator: "OAUTH",
+        token: "synthetic",
+      }),
       ...options,
     }),
   };
@@ -148,19 +144,13 @@ describe("operation disposal", () => {
     const { client, connections } = setup(
       { connectGate: gate.promise },
       {
-        connectionOptions: createConnectionOptions([
-          fromCredentials({
-            target: { account: "test", username: "synthetic" },
-            credential: {
-              type: "driver",
-              options: {
-                authenticator: "OAUTH_CLIENT_CREDENTIALS",
-                oauthClientId: "synthetic",
-                oauthClientSecret: "synthetic",
-              },
-            },
-          }),
-        ]),
+        connectionOptions: createConnectionOptions({
+          account: "test",
+          username: "synthetic",
+          authenticator: "OAUTH_CLIENT_CREDENTIALS",
+          oauthClientId: "synthetic",
+          oauthClientSecret: "synthetic",
+        }),
       },
     );
     const first = client.query("first", { authTimeoutMs: 10_000 });
@@ -284,19 +274,13 @@ describe("absolute deadlines", () => {
     const { client, connections } = setup(
       { connectGate: gate.promise },
       {
-        connectionOptions: createConnectionOptions([
-          fromCredentials({
-            target: { account: "test", username: "synthetic" },
-            credential: {
-              type: "driver",
-              options: {
-                authenticator: "OAUTH_CLIENT_CREDENTIALS",
-                oauthClientId: "synthetic",
-                oauthClientSecret: "synthetic",
-              },
-            },
-          }),
-        ]),
+        connectionOptions: createConnectionOptions({
+          account: "test",
+          username: "synthetic",
+          authenticator: "OAUTH_CLIENT_CREDENTIALS",
+          oauthClientId: "synthetic",
+          oauthClientSecret: "synthetic",
+        }),
       },
     );
     const first = client.query("first", { authTimeoutMs: 10_000 });
@@ -338,12 +322,11 @@ describe("absolute deadlines", () => {
     };
     const client = createSarClient({
       driver: fake.driver,
-      connectionOptions: createConnectionOptions([
-        fromCredentials({
-          target: { account: "test" },
-          credential: { type: "oauth", token: "synthetic" },
-        }),
-      ]),
+      connectionOptions: createConnectionOptions({
+        account: "test",
+        authenticator: "OAUTH",
+        token: "synthetic",
+      }),
     });
     const handle = await client.submit("synthetic");
     await expect(handle.result({ waitTimeoutMs: 100 })).rejects.toMatchObject({

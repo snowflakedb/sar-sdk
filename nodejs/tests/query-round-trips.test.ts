@@ -18,7 +18,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type snowflake from "snowflake-sdk";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions, fromCredentials } from "../src/auth.js";
+import { createConnectionOptions } from "../src/auth.js";
 import { fakeDriver } from "./fake-driver.js";
 import type { SarClientOptions } from "../src/types.js";
 
@@ -38,12 +38,12 @@ function setup(
     ...fake,
     client: createSarClient({
       driver: fake.driver,
-      connectionOptions: createConnectionOptions([
-        fromCredentials({
-          target: { account: "test" },
-          credential: { type: "oauth", token: "synthetic" },
-        }),
-      ]),
+      connectionOptions: createConnectionOptions({
+        account: "test",
+        accessUrl: "https://test.snowflakecomputing.com",
+        authenticator: "OAUTH",
+        token: "synthetic",
+      }),
       ...options,
     }),
   };
@@ -96,12 +96,12 @@ describe("result fetch", () => {
     };
     const client = createSarClient({
       driver: fake.driver,
-      connectionOptions: createConnectionOptions([
-        fromCredentials({
-          target: { account: "test" },
-          credential: { type: "oauth", token: "synthetic" },
-        }),
-      ]),
+      connectionOptions: createConnectionOptions({
+        account: "test",
+        accessUrl: "https://test.snowflakecomputing.com",
+        authenticator: "OAUTH",
+        token: "synthetic",
+      }),
     });
     await expect((await client.submit("SELECT 1")).result()).rejects.toMatchObject({
       code: "QUERY_FAILED",
