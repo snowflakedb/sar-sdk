@@ -29,6 +29,11 @@ in the private repository. Push branches and open pull requests only there. Only
 automation writes to snowflakedb/sar-sdk, so if a push or pull request to the private repository
 fails, stop and ask for help instead of trying the public repository.
 
+The mirror publishes every file except internal-only material, such as anything under a `NOMIRROR/`
+directory, and a pull request's title and commit messages become its published commit. A pull
+request check fails when any of them names a ticket, an internal link, host, or repository, or a
+team or person. Put that context in the pull request description, which isn't published.
+
 ## Language guides
 
 Each language directory has its own toolchain, checks, and changelog. Its guide covers the
