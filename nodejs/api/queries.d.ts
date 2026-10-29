@@ -10,10 +10,20 @@ interface ConnectionOptionsProvider {
 
 /** Node driver bind values, passed through without SQL interpolation. */
 type Binds = snowflake.Binds;
-/** Compatible injected driver. No module-global configure calls are made. */
+/**
+ * Compatible injected driver. Every session comes from its connection pools. No module-global
+ * configure calls are made.
+ */
 interface DriverModule {
-    createConnection(options: snowflake.ConnectionOptions): snowflake.Connection;
+    createPool(options: snowflake.ConnectionOptions, poolOptions?: NonNullable<Parameters<typeof snowflake.createPool>[1]>): ReturnType<typeof snowflake.createPool>;
 }
+/** Pool settings the SDK derives from its own options. */
+type SdkPoolKeys = "max" | "min" | "acquireTimeoutMillis" | "maxWaitingClients" | "idleTimeoutMillis";
+/**
+ * The driver's pool options, such as `fifo`, `testOnBorrow`, or `evictionRunIntervalMillis`,
+ * passed to `createPool` unchanged. The SDK sets the size, wait, and idle-timeout settings.
+ */
+type DriverPoolOptions = Omit<NonNullable<Parameters<typeof snowflake.createPool>[1]>, SdkPoolKeys>;
 /** Default materialization limits apply during row consumption, not afterward. */
 interface ResultOptions {
     format?: "json" | "native";
@@ -245,6 +255,7 @@ type PoolOptions = {
     maxQueue?: number;
     acquireTimeoutMs?: number;
     handleIdleTimeoutMs?: number;
+    driverPoolOptions?: DriverPoolOptions;
 } & ({
     mode?: "isolated";
     reset?: never;

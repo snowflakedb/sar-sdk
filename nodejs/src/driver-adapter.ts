@@ -19,19 +19,6 @@ import type snowflake from "snowflake-sdk";
 import { defined, isSarError, SarError, snowflakeDetails } from "./errors.js";
 import { deadline } from "./lifecycle.js";
 
-/** 3.3.0 connectAsync can fulfill after reporting a callback-only login error. */
-export function connect(connection: snowflake.Connection): Promise<void> {
-  return new Promise((resolve, reject) => {
-    connection.connect((error) => (error ? reject(error) : resolve()));
-  });
-}
-
-export function destroy(connection: snowflake.Connection): Promise<void> {
-  return new Promise((resolve, reject) => {
-    connection.destroy((error) => (error ? reject(error) : resolve()));
-  });
-}
-
 /** For a query already observed as SUCCESS; getResultsFromQueryId would check its status again. */
 export function fetchResult(
   connection: snowflake.Connection,

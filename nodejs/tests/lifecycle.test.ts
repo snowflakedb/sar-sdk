@@ -156,14 +156,12 @@ describe("operation disposal", () => {
     const first = client.query("first", { authTimeoutMs: 10_000 });
     await vi.waitFor(() => expect(connections[0]?.connect).toHaveBeenCalledOnce());
     const second = client.query("second", { authTimeoutMs: 200 });
-    const rejected = expect(second).rejects.toMatchObject({ code: "TIMEOUT" });
-    // The deadline must expire while the login waits in the queue, not before the connection exists.
-    await vi.waitFor(() => expect(connections).toHaveLength(2));
-    await rejected;
+    // The first login holds the queue, so the deadline expires while the second waits in it.
+    await expect(second).rejects.toMatchObject({ code: "TIMEOUT" });
     gate.resolve();
     await first;
-    await vi.waitFor(() => expect(connections[1]?.destroy).toHaveBeenCalledOnce());
-    expect(connections[1]?.connect).not.toHaveBeenCalled();
+    // The pool builds the second connection only when its turn comes, so it never existed.
+    expect(connections).toHaveLength(1);
     await client.close();
   });
   it("does not dispatch user SQL after initialization is aborted", async () => {
@@ -287,13 +285,13 @@ describe("absolute deadlines", () => {
     await vi.waitFor(() => expect(connections[0]?.connect).toHaveBeenCalledOnce());
     const second = client.query("second", { authTimeoutMs: 100 });
     const rejected = expect(second).rejects.toMatchObject({ code: "TIMEOUT" });
-    await vi.waitFor(() => expect(connections).toHaveLength(2));
+    // Lets the second login reach the queue behind the first.
+    await new Promise((resolve) => setTimeout(resolve, 20));
     now = 101;
     gate.resolve();
     await rejected;
     await first;
-    await vi.waitFor(() => expect(connections[1]?.destroy).toHaveBeenCalledOnce());
-    expect(connections[1]?.connect).not.toHaveBeenCalled();
+    expect(connections).toHaveLength(1);
     await client.close();
   });
   it("does not accept fulfillment after expiry when the timer callback is delayed", async () => {

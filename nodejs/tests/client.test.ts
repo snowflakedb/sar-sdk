@@ -836,14 +836,14 @@ describe("query failure details", () => {
     expect(inspect(error)).not.toContain("driver-sensitive-error");
     await client.close();
   });
-  it("carries driver codes from login and submission failures", async () => {
+  it("carries driver codes from submission failures, and not from logins", async () => {
     const login = setup({
       connectError: Object.assign(Error("Invalid OAuth access token."), { code: "390303" }),
     });
-    await expect(login.client.query("SELECT 1")).rejects.toMatchObject({
-      code: "AUTH_FAILED",
-      details: { completion: "not-submitted", errorCode: "390303" },
-    });
+    // The driver's pool reports a failed login by its message only.
+    const error = await login.client.query("SELECT 1").catch((failure: unknown) => failure);
+    expect(error).toMatchObject({ code: "AUTH_FAILED", details: { completion: "not-submitted" } });
+    expect(error).not.toHaveProperty("details.errorCode");
     await login.client.close();
     const submission = setup({
       executeError: Object.assign(Error("SQL compilation error"), {

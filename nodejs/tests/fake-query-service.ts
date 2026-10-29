@@ -18,8 +18,9 @@
 import { Readable } from "node:stream";
 import { vi } from "vitest";
 import type snowflake from "snowflake-sdk";
-import type { DriverModule, QueryIdentity } from "../src/types.js";
+import type { QueryIdentity } from "../src/types.js";
 import { failedQueryError } from "./fake-driver.js";
+import { driverPool, type FakeDriverModule } from "./fake-pool.js";
 
 export type SyntheticQuery = {
   status: string;
@@ -101,8 +102,10 @@ export function fakeQueryService() {
     if (query.status === "FAILED_WITH_ERROR")
       query.error = failedQueryError("000604", "SQL execution canceled", "synthetic");
   }
-  const driver: DriverModule = {
-    createConnection(config) {
+  const driver = {
+    createConnection(options: snowflake.ConnectionOptions) {
+      // The driver copies options when it builds a connection.
+      const config = { ...options };
       const identity = { ...settings.identity };
       const ownedIds: string[] = [];
       const streams: Readable[] = [];
@@ -258,6 +261,7 @@ export function fakeQueryService() {
         fetchResult,
       } as unknown as snowflake.Connection;
     },
-  };
+  } as FakeDriverModule;
+  driver.createPool = driverPool(driver);
   return { driver, connections, queries, settings };
 }

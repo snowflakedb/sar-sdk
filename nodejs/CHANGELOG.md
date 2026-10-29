@@ -36,6 +36,13 @@ limitations under the License.
   token is mounted and the default `fromToml()` profile otherwise, so an app needs no `NODE_ENV`
   check to choose a source. `createSarClient()` takes `connectionOptions` and `logger` and no connection
   settings, and `diagnostics()` reports only the session mode and connection counts.
+- Every session now comes from the Node driver's connection pools (`createPool`) instead of the
+  SDK's own pool. The new `pool.driverPoolOptions` passes any driver pool option through
+  unchanged, except the size, wait, and idle-timeout settings the SDK sets from `maxConnections`,
+  `maxQueue`, `acquireTimeoutMs`, and `idleTimeoutMs`.
+- **Breaking:** an injected `driver` must implement `createPool` instead of `createConnection`,
+  and `AUTH_FAILED` from a failed login no longer has `details.errorCode`, because the driver's
+  pool reports login failures by message only.
 
 ## 0.1.0-dev.1
 

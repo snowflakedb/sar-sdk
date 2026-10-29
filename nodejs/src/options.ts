@@ -44,6 +44,14 @@ const queryKeys = [
   "decodeRow",
 ];
 const sessionKeys = ["format", "warehouse", "acquireTimeoutMs", "authTimeoutMs"];
+/** Driver pool settings the SDK derives, with what to configure instead. */
+const sdkPoolKeys = {
+  max: "use pool.maxConnections",
+  min: "pooled sessions open on demand",
+  acquireTimeoutMillis: "use pool.acquireTimeoutMs",
+  maxWaitingClients: "use pool.maxQueue",
+  idleTimeoutMillis: "use pool.idleTimeoutMs",
+};
 
 export function queryOptions(
   defaults: SarClientOptions["results"],
@@ -126,6 +134,7 @@ export function clientOptions(input: SarClientOptions): InternalOptions {
       "idleTimeoutMs",
       "maxLifetimeMs",
       "resetTimeoutMs",
+      "driverPoolOptions",
     ],
     "pool",
   );
@@ -163,6 +172,14 @@ export function clientOptions(input: SarClientOptions): InternalOptions {
   ) {
     fail("INVALID_OPTIONS", "Reuse settings require reusable pool mode");
   }
+  const driverPool: unknown = input.pool?.driverPoolOptions;
+  if (driverPool !== undefined) {
+    if (!driverPool || typeof driverPool !== "object" || Array.isArray(driverPool))
+      fail("INVALID_OPTIONS", "driverPoolOptions must be an object");
+    for (const [key, replacement] of Object.entries(sdkPoolKeys))
+      if (key in driverPool)
+        fail("INVALID_OPTIONS", `driverPoolOptions.${key} is set by the SDK; ${replacement}`);
+  }
   for (const key of ["maxConnections", "maxQueue"] as const) {
     const value = input.pool?.[key];
     if (
@@ -175,9 +192,9 @@ export function clientOptions(input: SarClientOptions): InternalOptions {
     fail("INVALID_OPTIONS", "logger must be a function");
   if (
     input.driver !== undefined &&
-    (!input.driver || typeof input.driver.createConnection !== "function")
+    (!input.driver || typeof input.driver.createPool !== "function")
   )
-    fail("INVALID_OPTIONS", "driver must implement createConnection");
+    fail("INVALID_OPTIONS", "driver must implement createPool");
   const options = {
     ...input,
     pool: { ...input.pool } as SarClientOptions["pool"],
@@ -185,10 +202,11 @@ export function clientOptions(input: SarClientOptions): InternalOptions {
     results: { ...input.results },
     secrets: { ...input.secrets },
   };
-  if (input.driver)
-    options.driver = { createConnection: input.driver.createConnection.bind(input.driver) };
+  if (input.driver) options.driver = { createPool: input.driver.createPool.bind(input.driver) };
   if (input.pool?.mode === "reusable" && options.pool?.mode === "reusable")
     options.pool.reset = input.pool.reset.bind(input.pool);
+  if (input.pool?.driverPoolOptions && options.pool)
+    options.pool.driverPoolOptions = { ...input.pool.driverPoolOptions };
   queryOptions(options.results);
   return options;
 }

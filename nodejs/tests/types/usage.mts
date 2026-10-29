@@ -100,7 +100,7 @@ void client.withConnection({ asCaller: false, headers: new Headers() }, async ()
 void client.withConnection(async () => undefined, { asCaller: true, headers: new Headers() });
 // @ts-expect-error Caller views cannot switch identity or acquire owner connections.
 void caller.withConnection({ asCaller: false }, async () => undefined);
-import { createConnectionManager } from "../../src/connections.js";
+import { createConnectionManager, type DriverPoolOptions } from "../../src/connections.js";
 import { createQueryClient } from "../../src/queries.js";
 import { createFetchClient, type FetchInit as HttpFetchInit } from "../../src/account-http.js";
 import { createSecrets } from "../../src/secret-client.js";
@@ -122,6 +122,17 @@ createConnectionManager(auth, { pool: { mode: "reusable" } });
 createConnectionManager(auth, { pool: { mode: "reusable", reset: () => undefined } });
 // @ts-expect-error Isolated mode cannot configure reset.
 createConnectionManager(auth, { pool: { mode: "isolated", reset: async () => {} } });
+const driverPool: DriverPoolOptions = { fifo: false, testOnBorrow: true };
+createConnectionManager(auth, {
+  pool: { mode: "reusable", reset: async () => {}, driverPoolOptions: driverPool },
+});
+createConnectionManager(auth, {
+  // @ts-expect-error The SDK sets the driver pool's size from maxConnections.
+  pool: { mode: "reusable", reset: async () => {}, driverPoolOptions: { max: 5 } },
+});
+createConnectionManager(auth, { pool: { driverPoolOptions: { fifo: false } } });
+// @ts-expect-error Injected drivers provide the pools every session comes from.
+createConnectionManager(auth, { driver: { createConnection: snowflake.createConnection } });
 // @ts-expect-error Native callbacks must await driver work.
 manager.withConnection((connection) => connection.execute({ sqlText: "SELECT 1" }));
 // @ts-expect-error Manager caller identity comes from asCaller(context).

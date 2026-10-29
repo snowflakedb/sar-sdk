@@ -423,6 +423,17 @@ In JSON mode, query helpers set temporal output formats; reset must restore them
 a later native borrower if your application expects different formats. Warehouse overrides
 are separate pool partitions. `examples/composition.ts` shows a deliberately narrow contract.
 
+Every session, in either mode, comes from the Node driver's own connection pools, created with
+`snowflake.createPool()`: one per identity scope and warehouse override, and separate ones for
+detached queries. The SDK sets each pool's size from `maxConnections`, its idle timeout from
+`idleTimeoutMs`, and opens sessions on demand; its queue and acquisition deadline stay with the
+SDK. Pass any other driver pool option in `pool.driverPoolOptions`, such as `fifo`,
+`testOnBorrow`, or `evictionRunIntervalMillis` with `softIdleTimeoutMillis`. The SDK forwards
+these unchanged, so options added in later driver versions need no SDK change; it rejects only
+`max`, `min`, `acquireTimeoutMillis`, `maxWaitingClients`, and `idleTimeoutMillis`, which it sets
+itself. The driver's pool reports a failed login by its message only, so `AUTH_FAILED` from a
+failed login has no `details.errorCode`.
+
 Each session has one borrower at a time, including the entire stream/handle lifetime.
 Complete success runs reset before release; errors, early stream exit, cancellation,
 or failed reset discard the session. No application SQL is retried automatically.
@@ -765,8 +776,8 @@ snowflake.configure({ logLevel: "ERROR" });
 const client = createSarClient({ driver: snowflake });
 ```
 
-The injected module is authoritative. The default driver is loaded only when
-needed, never configured globally by the SDK. The tested baseline is 3.4.0;
+The injected module is authoritative; it must implement `createPool`, which every session comes
+from. The default driver is loaded only when needed, never configured globally by the SDK. The tested baseline is 3.4.0;
 other versions are not yet claimed compatible. Root types are SDK-owned except
 the explicit bind/driver integration boundaries. Advanced raw connection types
 are also exported from `@snowflake/sar-sdk/driver`.

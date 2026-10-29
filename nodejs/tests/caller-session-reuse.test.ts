@@ -92,10 +92,14 @@ describe("caller session reuse", () => {
     const alice = view();
     const run = async () => {
       const gate = deferred();
+      const started = deferred();
       const first = alice.withConnection(async (connection) => {
+        started.resolve();
         await gate.promise;
         return connection;
       });
+      // Otherwise the pool may hand the second operation's returned session to the first.
+      await started.promise;
       const second = alice.withConnection(async (connection) => connection);
       const other = await second;
       gate.resolve();

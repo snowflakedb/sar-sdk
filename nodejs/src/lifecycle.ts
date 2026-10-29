@@ -126,6 +126,11 @@ export class Budget {
       if (signal?.aborted) abort();
     });
   }
+  /** Counts a permit for something that already exists, even past the maximum. */
+  force(): () => void {
+    this.active++;
+    return this.releaseFunction();
+  }
   private releaseFunction(): () => void {
     let released = false;
     return () => {

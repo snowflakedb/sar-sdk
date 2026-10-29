@@ -20,10 +20,9 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createSarClient } from "../src/index.js";
 import { createConnectionOptions } from "../src/auth.js";
-import { connect } from "../src/driver-adapter.js";
 import { convertRow, metadata } from "../src/results.js";
 import { fakeDriver } from "./fake-driver.js";
-import type snowflake from "snowflake-sdk";
+import snowflake from "snowflake-sdk";
 
 const load = createRequire(path.join(process.cwd(), "package.json"));
 // Private driver imports are confined to pinned-version characterization tests.
@@ -98,22 +97,29 @@ describe("pinned driver compatibility", () => {
     } as unknown as snowflake.RowStatement;
     expect(() => metadata(statement, {})).toThrow("Column 'DATA' is an OBJECT");
   });
-  it("uses callback success rather than connectAsync fulfillment", async () => {
-    const error = Error("synthetic login failure");
-    const connection = {
-      connect: (callback: (error: Error) => void) => callback(error),
-      connectAsync: vi.fn(async () => undefined),
-    } as unknown as snowflake.Connection;
-    await expect(connect(connection)).rejects.toBe(error);
-    expect(connection.connectAsync).not.toHaveBeenCalled();
-  });
   it("does not invoke a raw callback on failed login", async () => {
     const { client, connections } = clientFor({ connectError: Error("private cause") });
     const callback = vi.fn();
     await expect(client.withConnection(callback)).rejects.toMatchObject({ code: "AUTH_FAILED" });
     expect(callback).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(connections[0]?.destroy).toHaveBeenCalledOnce());
+    // The driver's pool drops a connection that failed to log in; it has no session to log out.
+    expect(connections[0]?.destroy).not.toHaveBeenCalled();
+    expect((await client.diagnostics()).physicalConnections).toBe(0);
     await client.close();
+  });
+  it("builds pooled connections from the shared options as they are at acquire time", () => {
+    const options: Record<string, unknown> = {
+      account: "synthetic",
+      accessUrl: "https://synthetic.invalid",
+      authenticator: "OAUTH",
+      token: "synthetic",
+    };
+    const pool = snowflake.createPool(options as snowflake.ConnectionOptions, { max: 1, min: 0 });
+    for (const key of Object.keys(options)) delete options[key];
+    options.token = 42;
+    // The construction error escapes acquire() and leaves its request in the pool, unsettled.
+    expect(() => pool.acquire()).toThrow();
+    expect(pool.pending).toBe(1);
   });
   it("waits through BLOCKED and unknown statuses", async () => {
     const { client } = clientFor({ statuses: ["BLOCKED", "FUTURE_STATUS", "SUCCESS"] });

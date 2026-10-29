@@ -262,23 +262,19 @@ describe("query failure events", () => {
     ]);
     await client.close();
   });
-  it("carry a failed login's code without a session or query ID", async () => {
+  it("report a failed login without a session, query ID, or Snowflake's code", async () => {
     const { client, events } = setup({
       connectError: Object.assign(new Error("synthetic login failure"), { code: "390303" }),
     });
-    const rejected = { code: "AUTH_FAILED", details: { errorCode: "390303" } };
+    // The driver's pool reports a failed login by its message only.
+    const rejected = { code: "AUTH_FAILED", details: { completion: "not-submitted" } };
     await expect(client.query("SELECT 1")).rejects.toMatchObject(rejected);
     await expect(client.submit("SELECT 1")).rejects.toMatchObject(rejected);
     await expect(client.asCaller({ token: "alice" }).stream("SELECT 1")).rejects.toMatchObject(
       rejected,
     );
     await expect(client.connect()).rejects.toMatchObject(rejected);
-    const failed = {
-      event: "query-failed",
-      code: "AUTH_FAILED",
-      errorCode: "390303",
-      durationMs: ms,
-    };
+    const failed = { event: "query-failed", code: "AUTH_FAILED", durationMs: ms };
     expect(events).toStrictEqual([failed, failed, failed]);
     await client.close();
   });

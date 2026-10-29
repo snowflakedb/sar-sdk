@@ -18,7 +18,7 @@
 import { Readable } from "node:stream";
 import { vi } from "vitest";
 import type snowflake from "snowflake-sdk";
-import type { DriverModule } from "../src/types.js";
+import { driverPool, type FakeDriverModule } from "./fake-pool.js";
 
 type SyncReason = {
   data?: { data?: { queries?: { errorCode?: string; errorMessage?: string }[] } };
@@ -36,6 +36,10 @@ export function fakeDriver(
     executeError?: Error;
     queryError?: Error;
     connectError?: Error;
+    /** Thrown by createConnection, as the driver does for invalid options. */
+    constructError?: Error;
+    /** The query ID of a connection that isValidAsync reports as no longer usable. */
+    invalid?: string;
     connectDelay?: number;
     connectGate?: Promise<void>;
     fetchGate?: Promise<void>;
@@ -62,8 +66,11 @@ export function fakeDriver(
     getQueryStatus: ReturnType<typeof vi.fn>;
     fetchResult: ReturnType<typeof vi.fn>;
   }[] = [];
-  const driver: DriverModule = {
-    createConnection(config) {
+  const driver = {
+    createConnection(connectionOptions: snowflake.ConnectionOptions) {
+      // The driver copies options when it builds a connection.
+      const config = { ...connectionOptions };
+      if (options.constructError) throw options.constructError;
       const queryId = `query-${connections.length + 1}`;
       const cancel = vi.fn((callback: (error?: Error) => void) => callback(options.cancelError));
       let fetched = false;
@@ -161,6 +168,7 @@ export function fakeDriver(
         execute,
         destroy,
         getQueryStatus,
+        isValidAsync: async () => options.invalid !== queryId,
         isStillRunning: (status: string) => status === "RUNNING",
         getQueryStatusThrowIfError: async () => {
           throw options.queryError ?? new Error("driver-sensitive-error");
@@ -168,7 +176,8 @@ export function fakeDriver(
         fetchResult,
       } as unknown as snowflake.Connection;
     },
-  };
+  } as FakeDriverModule;
+  driver.createPool = driverPool(driver);
   return { driver, connections };
 }
 

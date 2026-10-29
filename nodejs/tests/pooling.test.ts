@@ -22,7 +22,6 @@ import path from "node:path";
 import { createConnectionManager } from "../src/connections.js";
 import { createQueryClient } from "../src/queries.js";
 import { createConnectionOptions, fromToml } from "../src/auth.js";
-import { SessionStore } from "../src/session-store.js";
 import type { ConnectionManagerOptions, PoolOptions } from "../src/types.js";
 import { fakeDriver } from "./fake-driver.js";
 
@@ -367,28 +366,26 @@ describe("bounded session reuse", () => {
     vi.useFakeTimers();
     const gate = deferred();
     const fake = fakeDriver({ destroyGate: gate.promise });
-    const store = new SessionStore({ mode: "reusable", reset: async () => {}, maxConnections: 1 });
-    const scope = {};
-    const first = await store.checkout(scope, undefined, 1000, new AbortController().signal);
-    const resource = store.attach(
-      fake.driver.createConnection({ account: "test" }),
-      scope,
-      undefined,
-      first.releaseSlot!,
+    const manager = createConnectionManager(
+      createConnectionOptions({ account: "test", authenticator: "OAUTH", token: "t" }),
+      { driver: fake.driver, pool: { mode: "reusable", reset: async () => {}, maxConnections: 1 } },
     );
-    const discard = store.discard(resource);
-    const rejected = expect(discard).rejects.toMatchObject({ code: "TIMEOUT" });
+    const work = manager.withConnection(async () => {
+      throw Error("synthetic application");
+    });
+    const rejected = expect(work).rejects.toThrow("synthetic application");
+    await vi.waitFor(() => expect(fake.connections[0]?.destroy).toHaveBeenCalledOnce());
     await vi.advanceTimersByTimeAsync(5001);
     await rejected;
-    expect(store.slots.active).toBe(1);
-    const next = store.checkout({}, undefined, 10, new AbortController().signal);
+    expect((await manager.diagnostics()).physicalConnections).toBe(1);
+    const next = manager.withConnection(async () => {});
     const timedOut = expect(next).rejects.toMatchObject({ code: "TIMEOUT" });
-    await vi.advanceTimersByTimeAsync(11);
+    await vi.advanceTimersByTimeAsync(120_001);
     await timedOut;
     gate.resolve();
     await vi.advanceTimersByTimeAsync(1);
-    expect(store.slots.active).toBe(0);
-    await store.closeIdle();
+    expect((await manager.diagnostics()).physicalConnections).toBe(0);
+    await manager.close();
   });
   it.each([
     { mode: "reusable" },

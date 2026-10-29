@@ -18,7 +18,6 @@
 import type snowflake from "snowflake-sdk";
 import { snapshotProvider, optionsScope, unconfiguredOptions } from "./auth-client.js";
 import type { ConnectionOptionsProvider } from "./auth-client.js";
-import { connect } from "./driver-adapter.js";
 import {
   duration,
   fail,
@@ -32,7 +31,7 @@ import {
 import { Budget, checkAbort, deadline, elapsed, pause, safeLogger } from "./lifecycle.js";
 import { completion, registerScope, type Lease } from "./lease.js";
 import { clientOptions } from "./options.js";
-import { SessionStore } from "./session-store.js";
+import { SessionStore, type Resource, type SessionKind } from "./session-store.js";
 import type {
   CallerContext,
   CloseOptions,
@@ -46,8 +45,16 @@ export type {
   ConnectionManager,
   ConnectionManagerOptions,
   ConnectionScope,
+  DriverPoolOptions,
   PoolOptions,
 } from "./types.js";
+
+const interactive = [
+  "EXTERNALBROWSER",
+  "USERNAME_PASSWORD_MFA",
+  "OAUTH_AUTHORIZATION_CODE",
+  "OAUTH_CLIENT_CREDENTIALS",
+];
 
 /** Lazy native-driver access. Components using this manager borrow it, never own it. */
 export function createConnectionManager(
@@ -70,6 +77,10 @@ export function createConnectionManager(
   const assertOpen = () => {
     if (closed) fail("CLIENT_CLOSED", "Connection manager is closed");
   };
+  const loadDriver = () =>
+    (driverPromise ??= options.driver
+      ? Promise.resolve(options.driver)
+      : import("snowflake-sdk").then((module) => module.default));
   // On SPCS, Snowflake gives every login with the same caller token one session, so a caller
   // transaction would also contain any other statement for that token. Count the work per token.
   const callerWork = new Map<string, { active: number; transaction: boolean }>();
@@ -124,67 +135,66 @@ export function createConnectionManager(
       shutdown.signal,
       ...(settings.signal ? [settings.signal] : []),
     ]);
-    let connection: snowflake.Connection | undefined;
-    let resource: ReturnType<SessionStore["attach"]> | undefined;
+    let resource: Resource | undefined;
     let releaseSlot: (() => void) | undefined;
     let abandoned = false;
     const timeout = settings.authTimeoutMs ?? 120_000;
     const expires = performance.now() + timeout;
     const deferLogout = credentials.mode === "caller" && !detached;
+    const kind: SessionKind = detached ? "detached" : deferLogout ? "caller" : "owned";
     const checkAuthentication = () => {
       if (abandoned) fail("ABORTED", "Authentication was abandoned");
       checkAbort(signal);
       if (performance.now() >= expires) fail("TIMEOUT", "Authentication deadline exceeded");
     };
+    const nativeOptions = (resolved: snowflake.ConnectionOptions) => ({
+      ...resolved,
+      ...(settings.warehouse ? { warehouse: settings.warehouse } : {}),
+      application: "SnowflakeAppRuntime",
+      clientSessionKeepAlive: false,
+      serverSessionKeepAlive: detached,
+    });
+    /** Interactive logins can prompt the user, so they run one at a time. */
+    const login = async <T>(resolved: snowflake.ConnectionOptions, run: () => Promise<T>) => {
+      if (!interactive.includes(resolved.authenticator?.toUpperCase() ?? "")) return run();
+      const turn = loginTail.then(run, run);
+      loginTail = turn.then(
+        () => {},
+        () => {},
+      );
+      return turn;
+    };
     const pending = (async () => {
       checkAuthentication();
-      const slot = await store.checkout(credentials, settings.warehouse, timeout, signal, detached);
-      resource = slot.resource;
-      releaseSlot = slot.releaseSlot;
+      const started = performance.now();
+      const driver = await loadDriver();
+      checkAuthentication();
+      const partition = () =>
+        store.partition(credentials, settings.warehouse, kind, driver.createPool);
+      if (store.counts(kind)) resource = await store.borrow(partition());
       checkAuthentication();
       if (!resource) {
-        const started = performance.now();
-        const resolved = credentials.options();
+        releaseSlot = await store.reserve(partition(), timeout, signal);
         checkAuthentication();
-        driverPromise ??= options.driver
-          ? Promise.resolve(options.driver)
-          : import("snowflake-sdk").then((module) => module.default);
-        const driver = await driverPromise;
-        checkAuthentication();
-        connection = driver.createConnection({
-          ...resolved,
-          ...(settings.warehouse ? { warehouse: settings.warehouse } : {}),
-          application: "SnowflakeAppRuntime",
-          clientSessionKeepAlive: false,
-          serverSessionKeepAlive: detached,
-        });
-        resource = store.attach(
-          connection,
-          credentials,
-          settings.warehouse,
-          releaseSlot!,
-          deferLogout,
-        );
-        releaseSlot = undefined;
-        const current = connection;
-        const login = async () => {
+        if (kind === "caller" && !store.counts(kind)) {
+          resource = await store.borrow(partition(), releaseSlot);
+          if (resource) releaseSlot = undefined;
           checkAuthentication();
-          await connect(current);
-        };
-        if (
-          [
-            "EXTERNALBROWSER",
-            "USERNAME_PASSWORD_MFA",
-            "OAUTH_AUTHORIZATION_CODE",
-            "OAUTH_CLIENT_CREDENTIALS",
-          ].includes(resolved.authenticator?.toUpperCase() ?? "")
-        ) {
-          const turn = loginTail.then(login, login);
-          loginTail = turn.catch(() => {});
-          await turn;
-        } else await login();
+        }
+      }
+      if (!resource) {
+        const resolved = nativeOptions(credentials.options());
+        checkAuthentication();
+        const opened = await login(resolved, () => {
+          checkAuthentication();
+          const current = partition();
+          const slot = releaseSlot!;
+          releaseSlot = undefined;
+          return store.open(current, resolved, slot);
+        });
+        resource = opened.resource;
         // Every detached submission and status check logs in, so these would add a line per poll.
-        if (!detached)
+        if (opened.opened && !detached)
           log?.({ event: "session-opened", mode: credentials.mode, durationMs: elapsed(started) });
       }
       const current = resource.connection;
