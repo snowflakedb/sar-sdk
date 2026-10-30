@@ -20,8 +20,8 @@ limitations under the License.
 A framework-neutral, server-side Node.js SDK for **Snowflake App Runtime (SAR)**, built on
 `snowflake-sdk`. It separates Snowflake access from application frameworks: caller identity,
 owned SQL sessions, bounded results, secrets, and account HTTP. Its clients are independent and
-lazy. Node.js server code only; not for browsers or Edge. This is an unpublished development
-package, and it doesn't replace the Snowflake Node.js driver.
+lazy. Node.js server code only; not for browsers or Edge. This is a development package, and it
+doesn't replace the Snowflake Node.js driver.
 
 Browser applications call their own authenticated backend endpoints and schedule
 polling themselves. The SDK provides no client-side query or polling utilities
@@ -30,10 +30,15 @@ query references on the server.
 
 ## Getting started
 
-There is no public npm release to install yet. From a checkout, run `npm ci` in `nodejs/` with
-its documented toolchain, then `npm run build`. For a local consumer, run `npm pack` there and
-install the resulting tarball; this does not publish anything. Keep the tarball out of source
-control.
+Development releases are published under the `next` dist-tag:
+
+```sh
+npm install @snowflake/sar-sdk@next
+```
+
+A development release, such as `0.1.0-dev.1`, has no compatibility promise: the next one can
+change the API without notice. Pin the exact version, and read the [changelog](CHANGELOG.md)
+before upgrading.
 
 ### Configure TypeScript
 

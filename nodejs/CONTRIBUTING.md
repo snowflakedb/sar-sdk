@@ -17,7 +17,7 @@ limitations under the License.
 
 # Contributing to the Node.js SDK
 
-This directory contains a pre-release, unpublished Node.js SDK licensed under the
+This directory contains a pre-release Node.js SDK licensed under the
 Apache License, Version 2.0. Keep changes reviewable: fix observable behavior,
 add a regression test, and describe compatibility effects.
 
@@ -122,7 +122,7 @@ It checks ESM/CJS, declarations, export encapsulation, lazy loading, browser rej
 contents, and a reviewed size budget. TypeScript sources and ESM source maps are
 included for debugging; split CommonJS output omits maps because the build tool's
 CJS map pass embeds machine-local generated-chunk paths.
-The package stays `private: true`. Its SPDX license identifier is `Apache-2.0`.
+Its SPDX license identifier is `Apache-2.0`.
 
 This directory's `.npmrc` turns off install scripts and skips versions published in the last
 seven days, and Dependabot waits the same seven days. Because pre- and post-scripts don't run,
@@ -144,9 +144,10 @@ ranges don't cross a 0.x minor version, so `^0.1.0` never installs a breaking re
 breaking changes bump the major version, features the minor version, and fixes the patch version.
 
 A breaking change is any change that needs compatibility review under the API rules above, a
-higher minimum Node.js version, or a driver upgrade that changes behavior. The first published
-version is 0.1.0. Move to 1.0.0 once the release checklist's qualification is complete and the API
-is stable.
+higher minimum Node.js version, or a driver upgrade that changes behavior. Development releases
+such as `0.1.0-dev.1` come first, published under the `next` dist-tag with no compatibility
+promise. The first final version is 0.1.0. Move to 1.0.0 once the release checklist's qualification
+is complete and the API is stable.
 
 [CHANGELOG.md](CHANGELOG.md) is the release notes, and it ships in the
 package. Add user-visible changes under Unreleased in the pull request that makes them, and start
@@ -163,6 +164,9 @@ To prepare a release, open one pull request that:
    headings, as in [Keep a Changelog](https://keepachangelog.com/), and omits empty headings.
 
 ## Release checklist
+
+This checklist gates final versions. A development release needs only passing checks and a
+reviewed release pull request.
 
 - [ ] Full checks and the Node 22/24 three-OS matrix pass on the release commit.
 - [ ] Independent reviewers approve public API, resource ownership, and credential handling.

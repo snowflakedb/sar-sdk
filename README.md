@@ -20,9 +20,9 @@ limitations under the License.
 The **Snowflake App Runtime (SAR)** SDK separates Snowflake access from application frameworks:
 caller identity, owned SQL sessions, bounded results, secrets, and account HTTP.
 
-| Language | Directory                     | Package              | Status                  |
-| -------- | ----------------------------- | -------------------- | ----------------------- |
-| Node.js  | [`nodejs/`](nodejs/README.md) | `@snowflake/sar-sdk` | Pre-release, not on npm |
+| Language | Directory                     | Package              | Status                                |
+| -------- | ----------------------------- | -------------------- | ------------------------------------- |
+| Node.js  | [`nodejs/`](nodejs/README.md) | `@snowflake/sar-sdk` | Development releases on npm (`@next`) |
 
 - [Contributing](CONTRIBUTING.md)
 - [Security](SECURITY.md)

@@ -13,7 +13,6 @@
     "sdk",
     "nodejs"
   ],
-  "private": true,
   "license": "Apache-2.0",
   "type": "module",
   "packageManager": "npm@11.18.0",
@@ -117,7 +116,6 @@
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsup && node scripts/build-types.mjs",
     "prepack": "npm run build",
-    "prepublishOnly": "node -e \"throw new Error('Publishing is disabled for this pre-release package')\"",
     "format": "prettier --write . ../*.md ../.github",
     "format:check": "prettier --check . ../*.md ../.github",
     "lint": "biome lint src tests scripts examples",
