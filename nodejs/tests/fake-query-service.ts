@@ -18,7 +18,7 @@
 import { Readable } from "node:stream";
 import { vi } from "vitest";
 import type snowflake from "snowflake-sdk";
-import type { QueryIdentity } from "../src/types.js";
+import type { QueryIdentity } from "../src/index.js";
 import { failedQueryError } from "./fake-driver.js";
 import { driverPool, type FakeDriverModule } from "./fake-pool.js";
 

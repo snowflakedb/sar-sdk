@@ -1,5 +1,29 @@
 import snowflake from 'snowflake-sdk';
 
+/** Client deadlines; each component reads only the ones that apply to it. */
+interface TimeoutOptions {
+    waitMs?: number;
+    consumeMs?: number;
+    closeMs?: number;
+    /** Default fetch() deadline, including reading the response body. Default: 120 seconds. */
+    httpMs?: number;
+}
+
+/** Structural interface implemented by Web Headers and Next.js request headers. */
+interface HeaderReader {
+    get(name: string): string | null | undefined;
+}
+/** Exactly one source is required. A supplied empty token is invalid. */
+type CallerContext = {
+    headers: HeaderReader;
+    token?: never;
+} | {
+    token: string;
+    headers?: never;
+};
+/** Extracts caller context; it does not validate the token or authenticate ingress. */
+declare function getCallerUserToken(headers: HeaderReader): string | null;
+
 type NativeConnectionOptions = snowflake.ConnectionOptions;
 /** Trusted application dependency. Returned native options contain credentials. */
 interface ConnectionOptionsProvider {
@@ -8,8 +32,27 @@ interface ConnectionOptionsProvider {
     getCallerOptions(token: string): NativeConnectionOptions;
 }
 
-/** Node driver bind values, passed through without SQL interpolation. */
-type Binds = snowflake.Binds;
+/**
+ * Events never contain SQL, binds, rows, credentials, profile values, file paths, or error
+ * messages.
+ */
+interface LogEvent {
+    event: string;
+    queryId?: string;
+    /** The SDK error code. */
+    code?: string;
+    /** Whole milliseconds, including session acquisition. */
+    durationMs?: number;
+    /** Returned rows, as in QueryResult. */
+    rowCount?: number;
+    /** Snowflake's numeric error code. */
+    errorCode?: string;
+    mode?: "owner" | "caller";
+}
+type CloseOptions = {
+    timeoutMs?: number;
+};
+
 /**
  * Compatible injected driver. Every session comes from its connection pools. No module-global
  * configure calls are made.
@@ -24,6 +67,76 @@ type SdkPoolKeys = "max" | "min" | "acquireTimeoutMillis" | "maxWaitingClients" 
  * passed to `createPool` unchanged. The SDK sets the size, wait, and idle-timeout settings.
  */
 type DriverPoolOptions = Omit<NonNullable<Parameters<typeof snowflake.createPool>[1]>, SdkPoolKeys>;
+/** Reuse requires application-specific restoration of all SQL session state. */
+type PoolOptions = {
+    maxConnections?: number;
+    maxQueue?: number;
+    acquireTimeoutMs?: number;
+    handleIdleTimeoutMs?: number;
+    driverPoolOptions?: DriverPoolOptions;
+} & ({
+    mode?: "isolated";
+    reset?: never;
+    idleTimeoutMs?: never;
+    maxLifetimeMs?: never;
+    resetTimeoutMs?: never;
+} | {
+    mode: "reusable";
+    reset: (connection: snowflake.Connection) => Promise<void>;
+    idleTimeoutMs?: number;
+    maxLifetimeMs?: number;
+    resetTimeoutMs?: number;
+});
+
+/** A scoped native-driver interface, with no identity switch or parent shutdown. */
+interface ConnectionScope {
+    withConnection<T>(callback: (connection: snowflake.Connection) => Promise<T>): Promise<T>;
+}
+
+interface ClientDiagnostics {
+    sessionMode: "isolated" | "reusable";
+    activeConnections: number;
+    queuedOperations: number;
+    idleConnections: number;
+    physicalConnections: number;
+}
+interface ConnectionManager extends ConnectionScope {
+    asCaller(context: CallerContext): ConnectionScope;
+    connect(): Promise<void>;
+    diagnostics(): Promise<ClientDiagnostics>;
+    close(options?: CloseOptions): Promise<void>;
+}
+type ConnectionManagerOptions = {
+    pool?: PoolOptions;
+    timeouts?: TimeoutOptions;
+    driver?: DriverModule;
+    logger?: (event: LogEvent) => void;
+};
+
+/** Standard fetch options plus a per-request deadline. */
+type FetchInit = RequestInit & {
+    /** Deadline for this request, including reading its body. Overrides `timeouts.httpMs`. */
+    timeoutMs?: number;
+};
+
+type FetchClientOptions = {
+    timeouts?: TimeoutOptions;
+};
+interface FetchScope {
+    /**
+     * Authenticated fetch to an account-relative path, retaining this view's identity.
+     * Redirects are rejected; consume or cancel the returned response body.
+     * Throws AUTH_NOT_SUPPORTED_FOR_REST when the credential cannot authorize HTTP.
+     */
+    fetch(path: string, init?: FetchInit): Promise<Response>;
+}
+interface FetchClient extends FetchScope {
+    asCaller(context: CallerContext): FetchScope;
+    close(): Promise<void>;
+}
+
+/** Node driver bind values, passed through without SQL interpolation. */
+type Binds = snowflake.Binds;
 /** Default materialization limits apply during row consumption, not afterward. */
 interface ResultOptions {
     format?: "json" | "native";
@@ -56,43 +169,6 @@ interface QueryOptions extends ResultOptions {
     /** Synchronous validation/transformation after SDK conversion. Promises are rejected. */
     decodeRow?: (row: unknown) => unknown;
 }
-/** Resolved column metadata. Temporal type identifies NTZ, LTZ, or TZ semantics. */
-interface ColumnMetadata {
-    name: string;
-    type: string;
-    index: number;
-    nullable: boolean;
-    precision: number | null;
-    scale: number | null;
-}
-/** rowCount counts returned rows, not rows affected by DML; see affectedRows. */
-interface QueryResult<Row = Record<string, unknown>> {
-    rows: Row[];
-    queryId: string;
-    columns: ColumnMetadata[];
-    rowCount: number;
-    /** Rows inserted, updated, deleted, or merged, when Snowflake reports a DML count. */
-    affectedRows?: number;
-}
-/** Single-consumer stream. Break iteration or call close to release the session. */
-interface RowStream<Row = Record<string, unknown>> extends AsyncIterable<Row> {
-    readonly queryId: string;
-    readonly columns: ColumnMetadata[];
-    close(): Promise<void>;
-}
-/** A process-local handle. Repeated result calls never resubmit the statement. */
-interface QueryHandle<Row = Record<string, unknown>> {
-    readonly queryId: string;
-    /** Server execution status; local result failures do not rewrite a known SUCCESS. */
-    status(): Promise<string>;
-    /** First call chooses deadlines and memoizes its result or failure. Never resubmits SQL. */
-    result(options?: {
-        signal?: AbortSignal;
-        waitTimeoutMs?: number;
-    }): Promise<QueryResult<Row>>;
-    /** Idempotent local cancellation/disposal, with best-effort server cancellation. */
-    cancel(): Promise<void>;
-}
 /**
  * Statement controls. The result format, warehouse, and acquisition/authentication timeouts belong
  * to the transaction.
@@ -111,11 +187,7 @@ interface TransactionOptions {
     acquireTimeoutMs?: number;
     authTimeoutMs?: number;
 }
-/** Runs statements on the transaction's session one at a time, in call order. */
-interface Transaction {
-    /** Materialized result, as from query(). Rejects once the transaction has ended. */
-    query<Row = Record<string, unknown>>(sql: string, options?: TransactionQueryOptions): Promise<QueryResult<Row>>;
-}
+
 /** Server-reported identity, not a login credential or request-supplied target. */
 interface QueryIdentity {
     readonly organization: string;
@@ -154,6 +226,32 @@ interface PollQueryOptions extends QueryLookupOptions {
     /** Trusted synchronous decoder; not saved in the reference. */
     decodeRow?: (row: unknown) => unknown;
 }
+
+/** Resolved column metadata. Temporal type identifies NTZ, LTZ, or TZ semantics. */
+interface ColumnMetadata {
+    name: string;
+    type: string;
+    index: number;
+    nullable: boolean;
+    precision: number | null;
+    scale: number | null;
+}
+/** rowCount counts returned rows, not rows affected by DML; see affectedRows. */
+interface QueryResult<Row = Record<string, unknown>> {
+    rows: Row[];
+    queryId: string;
+    columns: ColumnMetadata[];
+    rowCount: number;
+    /** Rows inserted, updated, deleted, or merged, when Snowflake reports a DML count. */
+    affectedRows?: number;
+}
+/** Single-consumer stream. Break iteration or call close to release the session. */
+interface RowStream<Row = Record<string, unknown>> extends AsyncIterable<Row> {
+    readonly queryId: string;
+    readonly columns: ColumnMetadata[];
+    close(): Promise<void>;
+}
+
 type QueryPollResult<Row = Record<string, unknown>> = {
     status: "pending";
     queryId: string;
@@ -203,18 +301,48 @@ interface DetachedQueryScope {
      */
     cancelQuery(reference: QueryReference, options?: QueryLookupOptions): Promise<QueryCancellation>;
 }
-/** Structural interface implemented by Web Headers and Next.js request headers. */
-interface HeaderReader {
-    get(name: string): string | null | undefined;
-}
-/** Exactly one source is required. A supplied empty token is invalid. */
-type CallerContext = {
-    headers: HeaderReader;
-    token?: never;
-} | {
-    token: string;
-    headers?: never;
+
+type QueryClientOptions = {
+    results?: ResultOptions;
+    timeouts?: TimeoutOptions;
+    handleIdleTimeoutMs?: number;
 };
+/** A process-local handle. Repeated result calls never resubmit the statement. */
+interface QueryHandle<Row = Record<string, unknown>> {
+    readonly queryId: string;
+    /** Server execution status; local result failures do not rewrite a known SUCCESS. */
+    status(): Promise<string>;
+    /** First call chooses deadlines and memoizes its result or failure. Never resubmits SQL. */
+    result(options?: {
+        signal?: AbortSignal;
+        waitTimeoutMs?: number;
+    }): Promise<QueryResult<Row>>;
+    /** Idempotent local cancellation/disposal, with best-effort server cancellation. */
+    cancel(): Promise<void>;
+}
+/** Runs statements on the transaction's session one at a time, in call order. */
+interface Transaction {
+    /** Materialized result, as from query(). Rejects once the transaction has ended. */
+    query<Row = Record<string, unknown>>(sql: string, options?: TransactionQueryOptions): Promise<QueryResult<Row>>;
+}
+interface QueryScope extends DetachedQueryScope {
+    query<Row = Record<string, unknown>>(sql: string, options?: QueryOptions): Promise<QueryResult<Row>>;
+    stream<Row = Record<string, unknown>>(sql: string, options?: QueryOptions): Promise<RowStream<Row>>;
+    submit<Row = Record<string, unknown>>(sql: string, options?: QueryOptions): Promise<QueryHandle<Row>>;
+    /**
+     * Run the callback's statements in one transaction on one session: BEGIN, then COMMIT when the
+     * callback's Promise fulfills or ROLLBACK when it rejects. A failed COMMIT has an unknown
+     * outcome. Never retries SQL.
+     */
+    transaction<T>(callback: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T>;
+}
+interface ScopedQueryClient extends QueryScope {
+    close(options?: CloseOptions): Promise<void>;
+}
+interface QueryClient extends ScopedQueryClient {
+    asCaller(context: CallerContext): QueryScope;
+}
+
 /** Username and password are resolved together from a single source. */
 interface PasswordSecret {
     username: string;
@@ -231,91 +359,15 @@ interface Secrets {
     getPassword(name: string): Promise<PasswordSecret>;
     getAccessToken(name: string): Promise<string>;
 }
-/**
- * Events never contain SQL, binds, rows, credentials, profile values, file paths, or error
- * messages.
- */
-interface LogEvent {
-    event: string;
-    queryId?: string;
-    /** The SDK error code. */
-    code?: string;
-    /** Whole milliseconds, including session acquisition. */
-    durationMs?: number;
-    /** Returned rows, as in QueryResult. */
-    rowCount?: number;
-    /** Snowflake's numeric error code. */
-    errorCode?: string;
-    mode?: "owner" | "caller";
+interface SecretsOptions {
+    directory?: string;
+    envPrefix?: string;
+    providers?: readonly SecretProvider[];
 }
-interface ClientDiagnostics {
-    sessionMode: "isolated" | "reusable";
-    activeConnections: number;
-    queuedOperations: number;
-    idleConnections: number;
-    physicalConnections: number;
-}
-/** Reuse requires application-specific restoration of all SQL session state. */
-type PoolOptions = {
-    maxConnections?: number;
-    maxQueue?: number;
-    acquireTimeoutMs?: number;
-    handleIdleTimeoutMs?: number;
-    driverPoolOptions?: DriverPoolOptions;
-} & ({
-    mode?: "isolated";
-    reset?: never;
-    idleTimeoutMs?: never;
-    maxLifetimeMs?: never;
-    resetTimeoutMs?: never;
-} | {
-    mode: "reusable";
-    reset: (connection: snowflake.Connection) => Promise<void>;
-    idleTimeoutMs?: number;
-    maxLifetimeMs?: number;
-    resetTimeoutMs?: number;
-});
-type CloseOptions = {
-    timeoutMs?: number;
-};
-/** A scoped native-driver interface, with no identity switch or parent shutdown. */
-interface ConnectionScope {
-    withConnection<T>(callback: (connection: snowflake.Connection) => Promise<T>): Promise<T>;
-}
-interface ConnectionManager extends ConnectionScope {
-    asCaller(context: CallerContext): ConnectionScope;
-    connect(): Promise<void>;
-    diagnostics(): Promise<ClientDiagnostics>;
-    close(options?: CloseOptions): Promise<void>;
-}
-type ConnectionManagerOptions = Pick<SarClientOptions, "pool" | "timeouts" | "driver" | "logger">;
-type QueryClientOptions = Pick<SarClientOptions, "results" | "timeouts"> & {
-    handleIdleTimeoutMs?: number;
-};
-type QueryScope = Pick<CallerClient, "query" | "stream" | "submit" | "transaction"> & DetachedQueryScope;
-interface ScopedQueryClient extends QueryScope {
-    close(options?: CloseOptions): Promise<void>;
-}
-interface QueryClient extends ScopedQueryClient {
-    asCaller(context: CallerContext): QueryScope;
-}
-type FetchClientOptions = Pick<SarClientOptions, "timeouts">;
-/** Standard fetch options plus a per-request deadline. */
-type FetchInit = RequestInit & {
-    /** Deadline for this request, including reading its body. Overrides `timeouts.httpMs`. */
-    timeoutMs?: number;
-};
-interface FetchScope {
-    fetch(path: string, init?: FetchInit): Promise<Response>;
-}
-interface FetchClient extends FetchScope {
-    asCaller(context: CallerContext): FetchScope;
-    close(): Promise<void>;
-}
-type SecretsOptions = NonNullable<SarClientOptions["secrets"]>;
 interface SecretsClient extends Secrets {
     close(): Promise<void>;
 }
+
 /** Options are checked at runtime for JavaScript callers as well. */
 type SarClientOptions = {
     /**
@@ -324,40 +376,14 @@ type SarClientOptions = {
      */
     connectionOptions?: ConnectionOptionsProvider;
     pool?: PoolOptions;
-    timeouts?: {
-        waitMs?: number;
-        consumeMs?: number;
-        closeMs?: number;
-        /** Default fetch() deadline, including reading the response body. Default: 120 seconds. */
-        httpMs?: number;
-    };
+    timeouts?: TimeoutOptions;
     results?: ResultOptions;
-    secrets?: {
-        directory?: string;
-        envPrefix?: string;
-        providers?: readonly SecretProvider[];
-    };
+    secrets?: SecretsOptions;
     driver?: DriverModule;
     logger?: (event: LogEvent) => void;
 };
 /** Caller views cannot read app secrets or close the parent client. */
-interface CallerClient extends DetachedQueryScope {
-    query<Row = Record<string, unknown>>(sql: string, options?: QueryOptions): Promise<QueryResult<Row>>;
-    stream<Row = Record<string, unknown>>(sql: string, options?: QueryOptions): Promise<RowStream<Row>>;
-    submit<Row = Record<string, unknown>>(sql: string, options?: QueryOptions): Promise<QueryHandle<Row>>;
-    /**
-     * Run the callback's statements in one transaction on one session: BEGIN, then COMMIT when the
-     * callback's Promise fulfills or ROLLBACK when it rejects. A failed COMMIT has an unknown
-     * outcome. Never retries SQL.
-     */
-    transaction<T>(callback: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T>;
-    withConnection<T>(callback: (connection: snowflake.Connection) => Promise<T>): Promise<T>;
-    /**
-     * Authenticated fetch to an account-relative path, retaining this view's identity.
-     * Redirects are rejected; consume or cancel the returned response body.
-     * Throws AUTH_NOT_SUPPORTED_FOR_REST when the credential cannot authorize HTTP.
-     */
-    fetch(path: string, init?: FetchInit): Promise<Response>;
+interface CallerClient extends QueryScope, ConnectionScope, FetchScope {
 }
 /** A lazy, independent server-side client. Call close during controlled shutdown. */
 interface SarClient extends CallerClient {
@@ -374,12 +400,8 @@ interface SarClient extends CallerClient {
         timeoutMs?: number;
     }): Promise<void>;
 }
-
 /** Convenient aggregate of the independently usable SAR components. */
 declare function createSarClient(input?: SarClientOptions): SarClient;
-
-/** Extracts caller context; it does not validate the token or authenticate ingress. */
-declare function getCallerUserToken(headers: HeaderReader): string | null;
 
 /** Stable failure categories. Driver causes are retained but never serialized. */
 type SarErrorCode = "INVALID_OPTIONS" | "CONFIG_NOT_FOUND" | "CONFIG_INVALID" | "AUTH_NOT_FOUND" | "AUTH_FAILED" | "AUTH_NOT_SUPPORTED" | "AUTH_NOT_SUPPORTED_FOR_REST" | "CALLER_CONTEXT_REQUIRED" | "CLIENT_CLOSED" | "QUEUE_FULL" | "TIMEOUT" | "ABORTED" | "QUERY_FAILED" | "QUERY_UNAVAILABLE" | "QUERY_IDENTITY_MISMATCH" | "DETACHED_QUERY_NOT_SUPPORTED" | "RESULT_LIMIT_EXCEEDED" | "RESULT_CONVERSION_UNSUPPORTED" | "DUPLICATE_COLUMNS" | "SECRET_NOT_FOUND" | "SECRET_UNAVAILABLE" | "HTTP_FAILED" | "SHUTDOWN_TIMEOUT";
@@ -428,4 +450,4 @@ declare class SarError extends Error {
 declare function isSarError(value: unknown): value is SarError;
 
 export { SarError, createSarClient, getCallerUserToken, isSarError };
-export type { Binds, CallerClient, CallerContext, ClientDiagnostics, CloseOptions, ColumnMetadata, CompletionState, ConnectionManager, ConnectionManagerOptions, ConnectionScope, DetachedQueryOptions, DetachedQueryScope, DriverModule, DriverPoolOptions, FetchClient, FetchClientOptions, FetchInit, FetchScope, HeaderReader, LogEvent, PasswordSecret, PollQueryOptions, PoolOptions, QueryCancellation, QueryClient, QueryClientOptions, QueryHandle, QueryIdentity, QueryLookupOptions, QueryOptions, QueryPollResult, QueryReference, QueryResult, QueryScope, QueryStreamResult, ResultOptions, RowStream, SarClient, SarClientOptions, SarErrorCode, ScopedQueryClient, SecretProvider, Secrets, SecretsClient, SecretsOptions, Transaction, TransactionOptions, TransactionQueryOptions };
+export type { Binds, CallerClient, CallerContext, ClientDiagnostics, CloseOptions, ColumnMetadata, CompletionState, ConnectionManager, ConnectionManagerOptions, ConnectionScope, DetachedQueryOptions, DetachedQueryScope, DriverModule, DriverPoolOptions, FetchClient, FetchClientOptions, FetchInit, FetchScope, HeaderReader, LogEvent, PasswordSecret, PollQueryOptions, PoolOptions, QueryCancellation, QueryClient, QueryClientOptions, QueryHandle, QueryIdentity, QueryLookupOptions, QueryOptions, QueryPollResult, QueryReference, QueryResult, QueryScope, QueryStreamResult, ResultOptions, RowStream, SarClient, SarClientOptions, SarErrorCode, ScopedQueryClient, SecretProvider, Secrets, SecretsClient, SecretsOptions, TimeoutOptions, Transaction, TransactionOptions, TransactionQueryOptions };

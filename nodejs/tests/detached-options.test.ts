@@ -21,8 +21,8 @@ import {
   lookupOptions,
   pollOptions,
   queryReference,
-} from "../src/detached-options.js";
-import type { QueryReference } from "../src/types.js";
+} from "../src/query-client/detached-options.js";
+import type { QueryReference } from "../src/index.js";
 
 function reference(): QueryReference {
   return {

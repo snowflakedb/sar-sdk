@@ -22,22 +22,22 @@ import { rollup } from "rollup";
 import dts from "rollup-plugin-dts";
 
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
-const entries = [
-  "index",
-  "auth",
-  "connections",
-  "queries",
-  "account-http",
-  "secret-client",
-  "driver",
-  "browser",
-];
+const entries = {
+  index: "index",
+  auth: "connection-options/index",
+  connections: "connection-manager/index",
+  queries: "query-client/index",
+  "account-http": "fetch-client/index",
+  "secret-client": "secrets-client/index",
+  driver: "driver",
+  browser: "browser",
+};
 
 // Bundle each public entry so declaration files do not point at private modules,
 // then mirror them to .d.cts for the CommonJS exports condition.
-for (const name of entries) {
+for (const [name, source] of Object.entries(entries)) {
   const bundle = await rollup({
-    input: path.join(packageRoot, "src", `${name}.ts`),
+    input: path.join(packageRoot, "src", `${source}.ts`),
     onwarn(warning, warn) {
       // browser.ts only throws; it has no exported types.
       if (warning.code === "EMPTY_BUNDLE") return;

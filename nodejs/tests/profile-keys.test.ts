@@ -19,10 +19,10 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vite
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createConnectionOptions, fromToml } from "../src/auth.js";
-import { profileFields } from "../src/config.js";
+import { createConnectionOptions, fromToml } from "../src/connection-options/index.js";
+import { profileFields } from "../src/connection-options/config.js";
 import { createSarClient } from "../src/index.js";
-import type { LogEvent, SarClientOptions } from "../src/types.js";
+import type { LogEvent, SarClientOptions } from "../src/index.js";
 import { fakeDriver } from "./fake-driver.js";
 
 let directory: string;

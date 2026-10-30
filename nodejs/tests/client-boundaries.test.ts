@@ -17,7 +17,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { createSarClient, SarError } from "../src/index.js";
-import { createConnectionOptions } from "../src/auth.js";
+import { createConnectionOptions } from "../src/connection-options/index.js";
 import { fakeDriver } from "./fake-driver.js";
 
 describe("integrated client boundaries", () => {

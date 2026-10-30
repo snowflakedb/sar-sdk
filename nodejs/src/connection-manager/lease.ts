@@ -16,9 +16,21 @@
  */
 
 import type snowflake from "snowflake-sdk";
-import type { ConnectionScope, LogEvent, QueryOptions } from "./types.js";
+import type { LogEvent } from "../core/lifecycle.js";
 import type { SessionState } from "./session-store.js";
-import { fail } from "./errors.js";
+import { fail } from "../core/errors.js";
+
+/** A scoped native-driver interface, with no identity switch or parent shutdown. */
+export interface ConnectionScope {
+  withConnection<T>(callback: (connection: snowflake.Connection) => Promise<T>): Promise<T>;
+}
+/** What a borrower may ask of the connection layer when it takes a session. */
+export type SessionRequest = {
+  warehouse?: string;
+  signal?: AbortSignal;
+  acquireTimeoutMs?: number;
+  authTimeoutMs?: number;
+};
 
 export type Lease = {
   connection: snowflake.Connection;
@@ -43,13 +55,13 @@ export const completion = (lease: Lease) =>
       : ("unknown" as const);
 type ScopeInternals = {
   /** A transaction's lease excludes other work for the same caller context until it's released. */
-  acquire(settings?: QueryOptions, transaction?: boolean): Promise<Lease>;
+  acquire(settings?: SessionRequest, transaction?: boolean): Promise<Lease>;
   handleIdleTimeoutMs: number;
   /** The client's logger, which never throws. */
   log?: (event: LogEvent) => void;
   detached?: {
     readonly mode: "owner" | "caller";
-    acquire(settings?: QueryOptions): Promise<Lease>;
+    acquire(settings?: SessionRequest): Promise<Lease>;
   };
 };
 // Non-enumerable and immutable, but shared by mixed ESM/CJS consumers. No global registry.

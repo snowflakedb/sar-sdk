@@ -19,10 +19,10 @@ import { Readable } from "node:stream";
 import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions } from "../src/auth.js";
-import { nextSteps, SarError } from "../src/errors.js";
-import { createConnectionManager } from "../src/connections.js";
-import { createQueryClient, type DetachedQueryScope } from "../src/queries.js";
+import { createConnectionOptions } from "../src/connection-options/index.js";
+import { nextSteps, SarError } from "../src/core/errors.js";
+import { createConnectionManager } from "../src/connection-manager/index.js";
+import { createQueryClient, type DetachedQueryScope } from "../src/query-client/index.js";
 import { fakeQueryService, deferred } from "./fake-query-service.js";
 import { failedQueryError } from "./fake-driver.js";
 

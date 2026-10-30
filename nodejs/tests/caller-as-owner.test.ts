@@ -18,15 +18,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type snowflake from "snowflake-sdk";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions, type ConnectionOptionsFactoryOptions } from "../src/auth.js";
-import { createConnectionManager } from "../src/connections.js";
-import { createQueryClient } from "../src/queries.js";
-import { createFetchClient } from "../src/account-http.js";
-import { HttpTransport } from "../src/http.js";
-import { nextSteps } from "../src/errors.js";
+import {
+  createConnectionOptions,
+  type ConnectionOptionsFactoryOptions,
+} from "../src/connection-options/index.js";
+import { createConnectionManager } from "../src/connection-manager/index.js";
+import { createQueryClient } from "../src/query-client/index.js";
+import { createFetchClient } from "../src/fetch-client/index.js";
+import { HttpTransport } from "../src/core/http.js";
+import { nextSteps } from "../src/core/errors.js";
 import { fakeDriver } from "./fake-driver.js";
 import { fakeQueryService } from "./fake-query-service.js";
-import type { CallerContext, PoolOptions, SarClientOptions } from "../src/types.js";
+import type { CallerContext, PoolOptions, SarClientOptions } from "../src/index.js";
 
 vi.mock("undici", () => ({
   EnvHttpProxyAgent: vi.fn(function () {

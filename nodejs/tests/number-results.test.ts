@@ -18,15 +18,15 @@
 import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions } from "../src/auth.js";
-import { createConnectionManager } from "../src/connections.js";
-import { queryReference } from "../src/detached-options.js";
-import type { SarError } from "../src/errors.js";
-import { createQueryClient } from "../src/queries.js";
-import { convertRow } from "../src/results.js";
+import { createConnectionOptions } from "../src/connection-options/index.js";
+import { createConnectionManager } from "../src/connection-manager/index.js";
+import { queryReference } from "../src/query-client/detached-options.js";
+import type { SarError } from "../src/core/errors.js";
+import { createQueryClient } from "../src/query-client/index.js";
+import { convertRow } from "../src/query-client/results.js";
 import { fakeDriver } from "./fake-driver.js";
 import { fakeQueryService } from "./fake-query-service.js";
-import type { ColumnMetadata, QueryOptions, QueryReference, ResultOptions } from "../src/types.js";
+import type { ColumnMetadata, QueryOptions, QueryReference, ResultOptions } from "../src/index.js";
 
 // Value shapes follow what the pinned driver passes through in JSON format: NUMBER as positional
 // text padded to its scale, FLOAT as the server's rounded text, which can use an exponent.

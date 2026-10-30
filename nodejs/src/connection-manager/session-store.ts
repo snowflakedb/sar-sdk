@@ -16,9 +16,53 @@
  */
 
 import type snowflake from "snowflake-sdk";
-import { fail } from "./errors.js";
-import { Budget, checkAbort, deadline } from "./lifecycle.js";
-import type { DriverModule, PoolOptions } from "./types.js";
+import { fail } from "../core/errors.js";
+import { Budget, checkAbort, deadline } from "../core/lifecycle.js";
+
+/**
+ * Compatible injected driver. Every session comes from its connection pools. No module-global
+ * configure calls are made.
+ */
+export interface DriverModule {
+  createPool(
+    options: snowflake.ConnectionOptions,
+    poolOptions?: NonNullable<Parameters<typeof snowflake.createPool>[1]>,
+  ): ReturnType<typeof snowflake.createPool>;
+}
+/** Pool settings the SDK derives from its own options. */
+type SdkPoolKeys =
+  "max" | "min" | "acquireTimeoutMillis" | "maxWaitingClients" | "idleTimeoutMillis";
+/**
+ * The driver's pool options, such as `fifo`, `testOnBorrow`, or `evictionRunIntervalMillis`,
+ * passed to `createPool` unchanged. The SDK sets the size, wait, and idle-timeout settings.
+ */
+export type DriverPoolOptions = Omit<
+  NonNullable<Parameters<typeof snowflake.createPool>[1]>,
+  SdkPoolKeys
+>;
+/** Reuse requires application-specific restoration of all SQL session state. */
+export type PoolOptions = {
+  maxConnections?: number;
+  maxQueue?: number;
+  acquireTimeoutMs?: number;
+  handleIdleTimeoutMs?: number;
+  driverPoolOptions?: DriverPoolOptions;
+} & (
+  | {
+      mode?: "isolated";
+      reset?: never;
+      idleTimeoutMs?: never;
+      maxLifetimeMs?: never;
+      resetTimeoutMs?: never;
+    }
+  | {
+      mode: "reusable";
+      reset: (connection: snowflake.Connection) => Promise<void>;
+      idleTimeoutMs?: number;
+      maxLifetimeMs?: number;
+      resetTimeoutMs?: number;
+    }
+);
 
 /** Session settings the SDK applied; an application reset hook starts a new one. */
 export type SessionState = { jsonFormats?: boolean };

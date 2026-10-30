@@ -17,16 +17,16 @@
 
 import { defineConfig } from "tsup";
 
-const entry = [
-  "src/index.ts",
-  "src/auth.ts",
-  "src/connections.ts",
-  "src/queries.ts",
-  "src/account-http.ts",
-  "src/secret-client.ts",
-  "src/driver.ts",
-  "src/browser.ts",
-];
+const entry = {
+  index: "src/index.ts",
+  auth: "src/connection-options/index.ts",
+  connections: "src/connection-manager/index.ts",
+  queries: "src/query-client/index.ts",
+  "account-http": "src/fetch-client/index.ts",
+  "secret-client": "src/secrets-client/index.ts",
+  driver: "src/driver.ts",
+  browser: "src/browser.ts",
+};
 const shared = {
   entry,
   splitting: true,

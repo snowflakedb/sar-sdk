@@ -25,25 +25,62 @@ import {
   queryReference,
   resultSettings,
 } from "./detached-options.js";
-import { cancellationDetails, fail, operationError, SarError } from "./errors.js";
-import { checkAbort, deadline } from "./lifecycle.js";
-import { completion, detachedInternals, type Lease } from "./lease.js";
+import { cancellationDetails, fail, operationError, SarError } from "../core/errors.js";
+import { checkAbort, deadline } from "../core/lifecycle.js";
+import { completion, detachedInternals, type Lease } from "../connection-manager/lease.js";
 import { failedQuery, fetchResult, queryState } from "./driver-adapter.js";
-import { queryOptions, type ResolvedQuery } from "./options.js";
+import { queryOptions, type ResolvedQuery } from "./query-options.js";
 import { executionOptions, temporalSessionSql } from "./results.js";
+import type { ConnectionScope } from "../connection-manager/lease.js";
 import type {
-  ConnectionScope,
   DetachedQueryOptions,
-  DetachedQueryScope,
   PollQueryOptions,
-  QueryCancellation,
   QueryIdentity,
-  QueryOptions,
+  QueryLookupOptions,
   QueryReference,
-  QueryResult,
-  ResultOptions,
-  RowStream,
-} from "./types.js";
+} from "./detached-options.js";
+import type { QueryOptions, ResultOptions } from "./query-options.js";
+import type { QueryResult, RowStream } from "./results.js";
+
+export type QueryPollResult<Row = Record<string, unknown>> =
+  | { status: "pending"; queryId: string }
+  | { status: "complete"; queryId: string; result: QueryResult<Row> };
+/** The stream reads every row; the reference's maxRows and maxBytes don't apply. */
+export type QueryStreamResult<Row = Record<string, unknown>> =
+  | { status: "pending"; queryId: string }
+  | { status: "complete"; queryId: string; stream: RowStream<Row> };
+/**
+ * `cancelled: true` only when this call requested cancellation and Snowflake confirmed it, or a
+ * status check afterward found it cancelled: FAILED_WITH_ERROR with error 000604, which is how
+ * Snowflake reports a cancelled query, or ABORTED. Otherwise `status` is the terminal status
+ * observed: the query had already finished, including after an earlier cancellation, or it
+ * finished before cancellation took effect.
+ */
+export type QueryCancellation =
+  { queryId: string; cancelled: true } | { queryId: string; cancelled: false; status: string };
+export interface DetachedQueryScope {
+  /** Return a reference after acknowledgement and local cleanup, without checking completion. */
+  submitDetached(sql: string, options?: DetachedQueryOptions): Promise<QueryReference>;
+  /** Check status once and fetch only completed results. The HTTP client schedules later polls. */
+  pollQuery<Row = Record<string, unknown>>(
+    reference: QueryReference,
+    options?: PollQueryOptions,
+  ): Promise<QueryPollResult<Row>>;
+  /**
+   * Check status once like pollQuery, and stream a completed result for export. The stream holds
+   * a lookup connection until it ends, is closed, aborts, or times out; it never cancels the query.
+   */
+  streamQuery<Row = Record<string, unknown>>(
+    reference: QueryReference,
+    options?: PollQueryOptions,
+  ): Promise<QueryStreamResult<Row>>;
+  getQueryStatus(reference: QueryReference, options?: QueryLookupOptions): Promise<string>;
+  /**
+   * Requests cancellation unless the query already finished, not guaranteed rollback. Does not
+   * delete a server session. Throws if an unconfirmed request leaves the query still running.
+   */
+  cancelQuery(reference: QueryReference, options?: QueryLookupOptions): Promise<QueryCancellation>;
+}
 
 type Acquire = (settings: QueryOptions) => Promise<Lease>;
 

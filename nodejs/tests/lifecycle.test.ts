@@ -17,11 +17,11 @@
 
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Budget, deadline } from "../src/lifecycle.js";
+import { Budget, deadline } from "../src/core/lifecycle.js";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions } from "../src/auth.js";
+import { createConnectionOptions } from "../src/connection-options/index.js";
 import { fakeDriver } from "./fake-driver.js";
-import type { SarClientOptions } from "../src/types.js";
+import type { SarClientOptions } from "../src/index.js";
 
 afterEach(() => {
   vi.useRealTimers();

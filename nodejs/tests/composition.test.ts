@@ -16,13 +16,13 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createConnectionOptions } from "../src/auth.js";
-import { createConnectionManager } from "../src/connections.js";
-import { createQueryClient } from "../src/queries.js";
-import { createFetchClient } from "../src/account-http.js";
-import { createSecrets } from "../src/secret-client.js";
+import { createConnectionOptions } from "../src/connection-options/index.js";
+import { createConnectionManager } from "../src/connection-manager/index.js";
+import { createQueryClient } from "../src/query-client/index.js";
+import { createFetchClient } from "../src/fetch-client/index.js";
+import { createSecrets } from "../src/secrets-client/index.js";
 import { createSarClient } from "../src/index.js";
-import type { ConnectionManagerOptions } from "../src/types.js";
+import type { ConnectionManagerOptions } from "../src/index.js";
 import { fakeDriver } from "./fake-driver.js";
 
 const fetchMock = vi.hoisted(() =>

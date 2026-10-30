@@ -29,10 +29,10 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { inspect } from "node:util";
-import { SarError } from "../src/errors.js";
-import { HttpTransport } from "../src/http.js";
-import { createSecretStore as createSecrets } from "../src/secrets.js";
-import type { SarClient, SarClientOptions, SecretProvider } from "../src/types.js";
+import { SarError } from "../src/core/errors.js";
+import { HttpTransport } from "../src/core/http.js";
+import { createSecretStore as createSecrets } from "../src/secrets-client/secrets-client.js";
+import type { SarClient, SarClientOptions, SecretProvider } from "../src/index.js";
 
 // No test in this file can create a dispatcher or use the network.
 vi.mock("undici", () => ({

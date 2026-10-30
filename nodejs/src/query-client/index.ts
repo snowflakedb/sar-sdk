@@ -15,11 +15,27 @@
  * limitations under the License.
  */
 
-export { getCallerUserToken } from "./caller.js";
-export { fromDefault, fromToml, fromPlatform } from "./sources.js";
-export { createConnectionOptions } from "./auth-client.js";
+export { createQueryClient } from "./query-client.js";
 export type {
-  ConnectionOptionsFactoryOptions,
-  ConnectionOptionsProvider,
-  NativeConnectionOptions,
-} from "./auth-client.js";
+  QueryClient,
+  QueryScope,
+  ScopedQueryClient,
+  QueryClientOptions,
+  QueryHandle,
+  Transaction,
+} from "./query-client.js";
+export type { QueryOptions, TransactionOptions, TransactionQueryOptions } from "./query-options.js";
+export type { QueryResult, RowStream } from "./results.js";
+export type {
+  DetachedQueryOptions,
+  PollQueryOptions,
+  QueryIdentity,
+  QueryLookupOptions,
+  QueryReference,
+} from "./detached-options.js";
+export type {
+  DetachedQueryScope,
+  QueryCancellation,
+  QueryPollResult,
+  QueryStreamResult,
+} from "./detached.js";

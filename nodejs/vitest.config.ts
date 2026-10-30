@@ -34,7 +34,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      exclude: ["src/browser.ts", "src/types.ts", "src/driver.ts"],
+      exclude: ["src/browser.ts", "src/driver.ts"],
       reporter: ["text", "json-summary", "lcov"],
       // Measured baseline, rounded down to avoid tiny cross-platform V8 differences.
       thresholds: { statements: 86, branches: 79, functions: 86, lines: 87 },

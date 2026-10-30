@@ -19,9 +19,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inspect } from "node:util";
 import { EnvHttpProxyAgent } from "undici";
 import { createSarClient, SarError, type FetchInit, type SarClientOptions } from "../src/index.js";
-import { createConnectionOptions } from "../src/auth.js";
-import { createFetchClient } from "../src/account-http.js";
-import { HttpTransport } from "../src/http.js";
+import { createConnectionOptions } from "../src/connection-options/index.js";
+import { createFetchClient } from "../src/fetch-client/index.js";
+import { HttpTransport } from "../src/core/http.js";
 
 const transport = vi.hoisted(() => ({ fetch: vi.fn(), destroy: vi.fn() }));
 vi.mock("undici", () => ({

@@ -19,27 +19,36 @@ import {
   snapshotProvider,
   unconfiguredOptions,
   optionsScope,
-  type ConnectionOptionsProvider,
-} from "./auth-client.js";
-import { endpoint } from "./config.js";
-import { duration, fail, isSarError, keys, SarError, signalOption } from "./errors.js";
-import { HttpTransport, relativeAccountUrl } from "./http.js";
-import { checkAbort } from "./lifecycle.js";
-import { clientOptions } from "./options.js";
-import type {
-  CallerContext,
-  FetchClient,
-  FetchClientOptions,
-  FetchInit,
-  FetchScope,
-} from "./types.js";
+} from "../connection-options/connection-options.js";
+import type { ConnectionOptionsProvider } from "../connection-options/connection-options.js";
+import type { CallerContext } from "../connection-options/caller.js";
+import { endpoint } from "../connection-options/config.js";
+import { duration, fail, isSarError, keys, SarError, signalOption } from "../core/errors.js";
+import { HttpTransport, relativeAccountUrl, type FetchInit } from "../core/http.js";
+import { checkAbort } from "../core/lifecycle.js";
+import { timeoutOptions, type TimeoutOptions } from "../core/timeouts.js";
+
+export type { FetchInit } from "../core/http.js";
+export type FetchClientOptions = { timeouts?: TimeoutOptions };
+export interface FetchScope {
+  /**
+   * Authenticated fetch to an account-relative path, retaining this view's identity.
+   * Redirects are rejected; consume or cancel the returned response body.
+   * Throws AUTH_NOT_SUPPORTED_FOR_REST when the credential cannot authorize HTTP.
+   */
+  fetch(path: string, init?: FetchInit): Promise<Response>;
+}
+export interface FetchClient extends FetchScope {
+  asCaller(context: CallerContext): FetchScope;
+  close(): Promise<void>;
+}
 
 export function createFetchClient(
   provider?: ConnectionOptionsProvider,
   input: FetchClientOptions = {},
 ): FetchClient {
   keys(input, ["timeouts"], "fetch client");
-  const options = clientOptions(input);
+  const options = { timeouts: timeoutOptions(input.timeouts) };
   const auth = snapshotProvider(provider ?? unconfiguredOptions);
   const http = new HttpTransport(options.timeouts?.httpMs);
   const shutdown = new AbortController();

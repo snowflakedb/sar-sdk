@@ -15,16 +15,53 @@
  * limitations under the License.
  */
 
-import { duration, fail, keys, signalOption } from "./errors.js";
-import { queryOptions } from "./options.js";
-import type {
-  DetachedQueryOptions,
-  PollQueryOptions,
-  QueryIdentity,
-  QueryLookupOptions,
-  QueryReference,
-  ResultOptions,
-} from "./types.js";
+import { duration, fail, keys, signalOption } from "../core/errors.js";
+import { queryOptions, type QueryOptions, type ResultOptions } from "./query-options.js";
+
+/** Server-reported identity, not a login credential or request-supplied target. */
+export interface QueryIdentity {
+  readonly organization: string;
+  readonly account: string;
+  readonly user: string;
+  readonly role: string;
+}
+/** Store on the server with application authorization; this is not a bearer credential. */
+export interface QueryReference {
+  readonly version: 1;
+  readonly queryId: string;
+  readonly submittedAt: string;
+  readonly identity: QueryIdentity;
+  readonly mode: "owner" | "caller";
+  /** Saved result settings. numbers is saved only as "number"; a missing value means "string". */
+  readonly results: Readonly<
+    Required<Omit<ResultOptions, "numbers">> & Pick<ResultOptions, "numbers">
+  >;
+}
+
+/** One self-contained statement whose lifetime is independent of the submitting request. */
+export interface DetachedQueryOptions
+  extends
+    ResultOptions,
+    Pick<QueryOptions, "binds" | "warehouse" | "signal" | "acquireTimeoutMs" | "authTimeoutMs"> {
+  /** Bounds setup and acknowledgement after login, not execution. Default: 30 seconds. */
+  submitTimeoutMs?: number;
+  /** Server execution limit, rounded down to whole seconds. Range: 1 second to 7 days. */
+  executionTimeoutMs?: number;
+}
+export interface QueryLookupOptions {
+  /** Aborts this lookup, never the detached query. Use cancelQuery for cancellation. */
+  signal?: AbortSignal;
+  acquireTimeoutMs?: number;
+  authTimeoutMs?: number;
+  /** Shared deadline for identity, status, and setup/fetch/cancel after login. Default: 30 seconds. */
+  lookupTimeoutMs?: number;
+}
+export interface PollQueryOptions extends QueryLookupOptions {
+  /** Bounds reading a completed result; expiry throws without cancelling the query. */
+  consumeTimeoutMs?: number;
+  /** Trusted synchronous decoder; not saved in the reference. */
+  decodeRow?: (row: unknown) => unknown;
+}
 
 const resultKeys = ["format", "rowMode", "maxRows", "maxBytes", "numbers"] as const;
 const lookupKeys = ["signal", "acquireTimeoutMs", "authTimeoutMs", "lookupTimeoutMs"];

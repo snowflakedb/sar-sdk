@@ -18,7 +18,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { executionOptions } from "../src/results.js";
+import { executionOptions } from "../src/query-client/results.js";
 
 const load = createRequire(path.join(process.cwd(), "package.json"));
 const driverEntry = load.resolve("snowflake-sdk");

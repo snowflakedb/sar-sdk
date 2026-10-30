@@ -166,7 +166,7 @@ void Promise.all([queries.close(),manager.close(),http.close(),secrets.close()])
   }
   await writeFile(
     path.join(consumer, "interop.mjs"),
-    `import assert from 'node:assert/strict'; import {createRequire} from 'node:module'; import * as esm from '@snowflake/sar-sdk'; import '@snowflake/sar-sdk/driver'; const require=createRequire(import.meta.url); const cjs=require('@snowflake/sar-sdk'); assert(cjs.isSarError(new esm.SarError('CLIENT_CLOSED','closed'))); assert(esm.isSarError(new cjs.SarError('CLIENT_CLOSED','closed'))); require('@snowflake/sar-sdk/driver'); assert.throws(()=>require('@snowflake/sar-sdk/src/client'), {code:'ERR_PACKAGE_PATH_NOT_EXPORTED'}); console.log('Mixed ESM/CommonJS guards and export encapsulation passed');`,
+    `import assert from 'node:assert/strict'; import {createRequire} from 'node:module'; import * as esm from '@snowflake/sar-sdk'; import '@snowflake/sar-sdk/driver'; const require=createRequire(import.meta.url); const cjs=require('@snowflake/sar-sdk'); assert(cjs.isSarError(new esm.SarError('CLIENT_CLOSED','closed'))); assert(esm.isSarError(new cjs.SarError('CLIENT_CLOSED','closed'))); require('@snowflake/sar-sdk/driver'); assert.throws(()=>require('@snowflake/sar-sdk/src/sar-client'), {code:'ERR_PACKAGE_PATH_NOT_EXPORTED'}); console.log('Mixed ESM/CommonJS guards and export encapsulation passed');`,
   );
   process.stdout.write(run(process.execPath, ["interop.mjs"], consumer));
   await writeFile(

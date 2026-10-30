@@ -19,8 +19,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions } from "../src/auth.js";
-import { convertRow, metadata } from "../src/results.js";
+import { createConnectionOptions } from "../src/connection-options/index.js";
+import { convertRow, metadata } from "../src/query-client/results.js";
 import { fakeDriver } from "./fake-driver.js";
 import snowflake from "snowflake-sdk";
 

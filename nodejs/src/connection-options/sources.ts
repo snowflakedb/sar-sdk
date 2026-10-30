@@ -25,7 +25,7 @@ import {
   profileFields,
   type Fields,
 } from "./config.js";
-import { fail, keys, SarError } from "./errors.js";
+import { fail, keys, SarError } from "../core/errors.js";
 
 /** Reads the token file whenever the options are read, so a rotated token is picked up. */
 function withTokenFile(options: snowflake.ConnectionOptions, filename: string) {

@@ -19,9 +19,9 @@ import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
 import type snowflake from "snowflake-sdk";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions } from "../src/auth.js";
-import { dmlCount, isDml } from "../src/results.js";
-import type { ColumnMetadata } from "../src/types.js";
+import { createConnectionOptions } from "../src/connection-options/index.js";
+import { dmlCount, isDml } from "../src/query-client/results.js";
+import type { ColumnMetadata } from "../src/index.js";
 import { dmlSummary, fakeDriver } from "./fake-driver.js";
 import { fakeQueryService } from "./fake-query-service.js";
 

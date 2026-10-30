@@ -15,8 +15,15 @@
  * limitations under the License.
  */
 
-import { fail, keys } from "./errors.js";
-import type { CallerContext, HeaderReader } from "./types.js";
+import { fail, keys } from "../core/errors.js";
+
+/** Structural interface implemented by Web Headers and Next.js request headers. */
+export interface HeaderReader {
+  get(name: string): string | null | undefined;
+}
+/** Exactly one source is required. A supplied empty token is invalid. */
+export type CallerContext =
+  { headers: HeaderReader; token?: never } | { token: string; headers?: never };
 
 /** Extracts caller context; it does not validate the token or authenticate ingress. */
 export function getCallerUserToken(headers: HeaderReader): string | null {

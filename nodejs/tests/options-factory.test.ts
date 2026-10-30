@@ -21,18 +21,23 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type snowflake from "snowflake-sdk";
-import { createConnectionOptions, fromDefault, fromPlatform, fromToml } from "../src/auth.js";
+import {
+  createConnectionOptions,
+  fromDefault,
+  fromPlatform,
+  fromToml,
+} from "../src/connection-options/index.js";
 import {
   optionsScope,
   snapshotProvider,
   unconfiguredOptions,
   type ConnectionOptionsProvider,
-} from "../src/auth-client.js";
-import { createConnectionManager } from "../src/connections.js";
-import { createQueryClient } from "../src/queries.js";
+} from "../src/connection-options/connection-options.js";
+import { createConnectionManager } from "../src/connection-manager/index.js";
+import { createQueryClient } from "../src/query-client/index.js";
 import { createSarClient } from "../src/index.js";
-import { createFetchClient } from "../src/account-http.js";
-import { HttpTransport } from "../src/http.js";
+import { createFetchClient } from "../src/fetch-client/index.js";
+import { HttpTransport } from "../src/core/http.js";
 import { fakeDriver } from "./fake-driver.js";
 
 // Synthetic platform token mounts; no real file under /snowflake is ever read.
@@ -385,7 +390,7 @@ describe("fromPlatform", () => {
   });
   it("reads only /snowflake/session/token, not another mount", () => {
     vi.stubEnv("SNOWFLAKE_ACCOUNT", "test");
-    mountedFiles.set("/snowflake/secrets/snowflake-session/token", "elsewhere");
+    mountedFiles.set("/snowflake/secrets-client/snowflake-session/token", "elsewhere");
     expect(() => fromPlatform()).toThrow(thrown("AUTH_NOT_FOUND"));
     mountedFiles.set(platformToken, "token");
     expect(fromPlatform().token).toBe("token");

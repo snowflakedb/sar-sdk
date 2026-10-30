@@ -15,5 +15,11 @@
  * limitations under the License.
  */
 
-export { createFetchClient } from "./fetch-client.js";
-export type { FetchClient, FetchClientOptions, FetchInit, FetchScope } from "./types.js";
+export { createConnectionManager } from "./connection-manager.js";
+export type {
+  ConnectionManager,
+  ConnectionManagerOptions,
+  ConnectionScope,
+  DriverPoolOptions,
+  PoolOptions,
+} from "./connection-manager.js";

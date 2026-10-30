@@ -21,13 +21,17 @@ import { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type snowflake from "snowflake-sdk";
-import { createConnectionOptions, fromToml, getCallerUserToken } from "../src/auth.js";
+import {
+  createConnectionOptions,
+  fromToml,
+  getCallerUserToken,
+} from "../src/connection-options/index.js";
 import {
   optionsScope,
   snapshotProvider,
   type ConnectionOptionsProvider,
-} from "../src/auth-client.js";
-import { endpoint, normalize, profileFields } from "../src/config.js";
+} from "../src/connection-options/connection-options.js";
+import { endpoint, normalize, profileFields } from "../src/connection-options/config.js";
 
 // Observe every file read, so a test can show which files the SDK reads and when.
 vi.mock("node:fs", async (importOriginal) => {

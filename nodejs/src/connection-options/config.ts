@@ -19,7 +19,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parse } from "smol-toml";
-import { fail, nextSteps, SarError } from "./errors.js";
+import { fail, nextSteps, SarError } from "../core/errors.js";
 
 /** Where SPCS and Serverless both mount the service's OAuth session token. */
 export const platformTokenFile = "/snowflake/session/token";

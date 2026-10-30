@@ -17,8 +17,8 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions } from "../src/auth.js";
-import { HttpTransport } from "../src/http.js";
+import { createConnectionOptions } from "../src/connection-options/index.js";
+import { HttpTransport } from "../src/core/http.js";
 import { fakeDriver } from "./fake-driver.js";
 
 vi.mock("undici", () => ({

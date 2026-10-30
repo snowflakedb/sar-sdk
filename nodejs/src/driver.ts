@@ -17,4 +17,4 @@
 
 /** Driver types are exposed only for explicit advanced integration. */
 export type { Connection, ConnectionOptions } from "snowflake-sdk";
-export type { DriverModule } from "./types.js";
+export type { DriverModule } from "./connection-manager/session-store.js";

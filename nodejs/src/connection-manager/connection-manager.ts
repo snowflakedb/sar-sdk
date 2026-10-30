@@ -16,8 +16,12 @@
  */
 
 import type snowflake from "snowflake-sdk";
-import { snapshotProvider, optionsScope, unconfiguredOptions } from "./auth-client.js";
-import type { ConnectionOptionsProvider } from "./auth-client.js";
+import {
+  snapshotProvider,
+  optionsScope,
+  unconfiguredOptions,
+} from "../connection-options/connection-options.js";
+import type { ConnectionOptionsProvider } from "../connection-options/connection-options.js";
 import {
   duration,
   fail,
@@ -27,27 +31,57 @@ import {
   operationError,
   SarError,
   snowflakeDetails,
-} from "./errors.js";
-import { Budget, checkAbort, deadline, elapsed, pause, safeLogger } from "./lifecycle.js";
-import { completion, registerScope, type Lease } from "./lease.js";
-import { clientOptions } from "./options.js";
-import { SessionStore, type Resource, type SessionKind } from "./session-store.js";
-import type {
-  CallerContext,
-  CloseOptions,
-  ConnectionManager,
-  ConnectionManagerOptions,
-  ConnectionScope,
-  DriverModule,
-  QueryOptions,
-} from "./types.js";
-export type {
-  ConnectionManager,
-  ConnectionManagerOptions,
-  ConnectionScope,
-  DriverPoolOptions,
-  PoolOptions,
-} from "./types.js";
+} from "../core/errors.js";
+import {
+  Budget,
+  checkAbort,
+  deadline,
+  elapsed,
+  pause,
+  safeLogger,
+  type CloseOptions,
+  type LogEvent,
+} from "../core/lifecycle.js";
+import type { TimeoutOptions } from "../core/timeouts.js";
+import {
+  completion,
+  registerScope,
+  type ConnectionScope,
+  type Lease,
+  type SessionRequest,
+} from "./lease.js";
+import {
+  SessionStore,
+  type DriverModule,
+  type PoolOptions,
+  type Resource,
+  type SessionKind,
+} from "./session-store.js";
+import { connectionOptions } from "./connection-manager-options.js";
+import type { CallerContext } from "../connection-options/caller.js";
+
+export type { ConnectionScope } from "./lease.js";
+export type { DriverModule, DriverPoolOptions, PoolOptions } from "./session-store.js";
+
+export interface ClientDiagnostics {
+  sessionMode: "isolated" | "reusable";
+  activeConnections: number;
+  queuedOperations: number;
+  idleConnections: number;
+  physicalConnections: number;
+}
+export interface ConnectionManager extends ConnectionScope {
+  asCaller(context: CallerContext): ConnectionScope;
+  connect(): Promise<void>;
+  diagnostics(): Promise<ClientDiagnostics>;
+  close(options?: CloseOptions): Promise<void>;
+}
+export type ConnectionManagerOptions = {
+  pool?: PoolOptions;
+  timeouts?: TimeoutOptions;
+  driver?: DriverModule;
+  logger?: (event: LogEvent) => void;
+};
 
 const interactive = [
   "EXTERNALBROWSER",
@@ -61,8 +95,7 @@ export function createConnectionManager(
   provider?: ConnectionOptionsProvider,
   input: ConnectionManagerOptions = {},
 ): ConnectionManager {
-  keys(input, ["pool", "timeouts", "driver", "logger"], "connection manager");
-  const options = clientOptions(input);
+  const options = connectionOptions(input);
   const auth = snapshotProvider(provider ?? unconfiguredOptions);
   const log = safeLogger(options.logger);
   const ownerOptions = optionsScope(auth);
@@ -114,7 +147,7 @@ export function createConnectionManager(
   }
   async function acquire(
     credentials: ReturnType<typeof optionsScope>,
-    settings: QueryOptions = {},
+    settings: SessionRequest = {},
     detached = false,
     transaction = false,
   ): Promise<Lease> {
@@ -259,13 +292,13 @@ export function createConnectionManager(
   }
   function internals(credentials: ReturnType<typeof optionsScope>) {
     return {
-      acquire: (settings?: QueryOptions, transaction?: boolean) =>
+      acquire: (settings?: SessionRequest, transaction?: boolean) =>
         acquire(credentials, settings, false, transaction),
       handleIdleTimeoutMs: options.pool?.handleIdleTimeoutMs ?? 300_000,
       log,
       detached: {
         mode: credentials.mode,
-        acquire: (settings?: QueryOptions) => acquire(credentials, settings, true),
+        acquire: (settings?: SessionRequest) => acquire(credentials, settings, true),
       },
     };
   }

@@ -21,9 +21,9 @@ import {
   type QueryRecord,
   type DetachedHttpDependencies,
 } from "../examples/detached-http.js";
-import { SarError } from "../src/errors.js";
+import { SarError } from "../src/core/errors.js";
 import { createSarClient } from "../src/index.js";
-import type { QueryCancellation, QueryReference, SarClient } from "../src/types.js";
+import type { QueryCancellation, QueryReference, SarClient } from "../src/index.js";
 import { deferred, fakeQueryService } from "./fake-query-service.js";
 
 function setup() {

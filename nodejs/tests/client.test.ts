@@ -18,10 +18,13 @@
 import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSarClient, getCallerUserToken, isSarError, SarError } from "../src/index.js";
-import { nextSteps, snowflakeDetails } from "../src/errors.js";
-import { createConnectionOptions, type ConnectionOptionsProvider } from "../src/auth.js";
+import { nextSteps, snowflakeDetails } from "../src/core/errors.js";
+import {
+  createConnectionOptions,
+  type ConnectionOptionsProvider,
+} from "../src/connection-options/index.js";
 import { failedQueryError, fakeDriver } from "./fake-driver.js";
-import type { SarClientOptions } from "../src/types.js";
+import type { SarClientOptions } from "../src/index.js";
 
 const connection = {
   account: "org-account",

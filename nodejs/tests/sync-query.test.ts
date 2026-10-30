@@ -19,7 +19,7 @@ import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import type snowflake from "snowflake-sdk";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions } from "../src/auth.js";
+import { createConnectionOptions } from "../src/connection-options/index.js";
 import { fakeDriver } from "./fake-driver.js";
 
 function setup(fakeOptions: Parameters<typeof fakeDriver>[0] = {}) {

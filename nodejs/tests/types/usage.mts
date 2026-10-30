@@ -27,7 +27,12 @@ import {
   type Transaction,
   type TransactionQueryOptions,
 } from "../../src/index.js";
-import { createConnectionOptions, fromDefault, fromPlatform, fromToml } from "../../src/auth.js";
+import {
+  createConnectionOptions,
+  fromDefault,
+  fromPlatform,
+  fromToml,
+} from "../../src/connection-options/index.js";
 const client: SarClient = createSarClient({
   connectionOptions: createConnectionOptions({
     account: "test",
@@ -100,10 +105,16 @@ void client.withConnection({ asCaller: false, headers: new Headers() }, async ()
 void client.withConnection(async () => undefined, { asCaller: true, headers: new Headers() });
 // @ts-expect-error Caller views cannot switch identity or acquire owner connections.
 void caller.withConnection({ asCaller: false }, async () => undefined);
-import { createConnectionManager, type DriverPoolOptions } from "../../src/connections.js";
-import { createQueryClient } from "../../src/queries.js";
-import { createFetchClient, type FetchInit as HttpFetchInit } from "../../src/account-http.js";
-import { createSecrets } from "../../src/secret-client.js";
+import {
+  createConnectionManager,
+  type DriverPoolOptions,
+} from "../../src/connection-manager/index.js";
+import { createQueryClient } from "../../src/query-client/index.js";
+import {
+  createFetchClient,
+  type FetchInit as HttpFetchInit,
+} from "../../src/fetch-client/index.js";
+import { createSecrets } from "../../src/secrets-client/index.js";
 const auth = createConnectionOptions(fromPlatform());
 const manager = createConnectionManager(auth, {
   pool: { mode: "reusable", reset: async () => {} },

@@ -16,7 +16,25 @@
  */
 
 import { SarError, fail } from "./errors.js";
-import type { LogEvent } from "./types.js";
+
+/**
+ * Events never contain SQL, binds, rows, credentials, profile values, file paths, or error
+ * messages.
+ */
+export interface LogEvent {
+  event: string;
+  queryId?: string;
+  /** The SDK error code. */
+  code?: string;
+  /** Whole milliseconds, including session acquisition. */
+  durationMs?: number;
+  /** Returned rows, as in QueryResult. */
+  rowCount?: number;
+  /** Snowflake's numeric error code. */
+  errorCode?: string;
+  mode?: "owner" | "caller";
+}
+export type CloseOptions = { timeoutMs?: number };
 
 export function checkAbort(signal?: AbortSignal): void {
   if (signal?.aborted) throw new SarError("ABORTED", "Operation aborted");

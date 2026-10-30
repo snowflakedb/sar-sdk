@@ -17,10 +17,10 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions } from "../src/auth.js";
-import { nextSteps } from "../src/errors.js";
+import { createConnectionOptions } from "../src/connection-options/index.js";
+import { nextSteps } from "../src/core/errors.js";
 import { fakeDriver } from "./fake-driver.js";
-import type { PoolOptions } from "../src/types.js";
+import type { PoolOptions } from "../src/index.js";
 
 const connection = {
   account: "org-account",

@@ -19,9 +19,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fromToml } from "../src/auth.js";
-import { profileFields } from "../src/config.js";
-import { nextSteps } from "../src/errors.js";
+import { fromToml } from "../src/connection-options/index.js";
+import { profileFields } from "../src/connection-options/config.js";
+import { nextSteps } from "../src/core/errors.js";
 
 let directory: string;
 beforeEach(async () => {

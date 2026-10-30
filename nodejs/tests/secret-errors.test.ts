@@ -20,12 +20,12 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os";
 import path from "node:path";
 import { inspect } from "node:util";
-import { SarError } from "../src/errors.js";
-import { HttpTransport } from "../src/http.js";
+import { SarError } from "../src/core/errors.js";
+import { HttpTransport } from "../src/core/http.js";
 import { createSarClient } from "../src/index.js";
-import { createSecrets } from "../src/secret-client.js";
-import { createSecretStore } from "../src/secrets.js";
-import type { SarClientOptions, SecretProvider, Secrets } from "../src/types.js";
+import { createSecrets } from "../src/secrets-client/index.js";
+import { createSecretStore } from "../src/secrets-client/secrets-client.js";
+import type { SarClientOptions, SecretProvider, Secrets } from "../src/index.js";
 
 // No test in this file can create a dispatcher or use the network.
 vi.mock("undici", () => ({

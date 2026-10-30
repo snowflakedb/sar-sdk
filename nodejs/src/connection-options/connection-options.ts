@@ -19,8 +19,8 @@ import { createHash } from "node:crypto";
 import type snowflake from "snowflake-sdk";
 import { callerToken } from "./caller.js";
 import { endpoint } from "./config.js";
-import { fail, keys, nextSteps, SarError } from "./errors.js";
-import type { CallerContext } from "./types.js";
+import { fail, keys, nextSteps, SarError } from "../core/errors.js";
+import type { CallerContext } from "./caller.js";
 
 export type NativeConnectionOptions = snowflake.ConnectionOptions;
 /** Trusted application dependency. Returned native options contain credentials. */

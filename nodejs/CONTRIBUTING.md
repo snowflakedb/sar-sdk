@@ -57,14 +57,20 @@ claim that every CI combination or deployed platform has been exercised.
 ### Directory map
 
 ```text
-src/            Public API and implementation
-api/            Public API snapshot, checked by npm run api:check
-tests/          Driver-contract, lifecycle, config, auth, secrets, HTTP tests
-tests/types/    Compile-only consumer contracts, including invalid usage
-examples/       Small typechecked public-API examples
-scripts/        Declaration build, API snapshot check, and packed-consumer verification
-README.md       Usage guide, shipped with the package
-CHANGELOG.md    Release notes, shipped with the package
+src/                     Public entry points and sar-client.ts, which composes the packages below
+src/core/                Errors, deadlines, timeouts, HTTP transport; imports no other package
+src/connection-options/  Connection options and caller identity
+src/connection-manager/  Sessions and driver pools
+src/query-client/        Queries, transactions, and detached queries
+src/fetch-client/        Authenticated account HTTP
+src/secrets-client/      Mounted, environment, and token secrets
+api/                     Public API snapshot, checked by npm run api:check
+tests/                   Driver-contract, lifecycle, config, auth, secrets, HTTP tests
+tests/types/             Compile-only consumer contracts, including invalid usage
+examples/                Small typechecked public-API examples
+scripts/                 Declaration build, API snapshot check, and packed-consumer verification
+README.md                Usage guide, shipped with the package
+CHANGELOG.md             Release notes, shipped with the package
 ```
 
 ## Workflow

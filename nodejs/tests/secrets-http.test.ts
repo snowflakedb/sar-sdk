@@ -20,9 +20,9 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createSarClient } from "../src/index.js";
-import { createConnectionOptions } from "../src/auth.js";
-import { createSecretStore as createSecrets } from "../src/secrets.js";
-import { HttpTransport, relativeAccountUrl } from "../src/http.js";
+import { createConnectionOptions } from "../src/connection-options/index.js";
+import { createSecretStore as createSecrets } from "../src/secrets-client/secrets-client.js";
+import { HttpTransport, relativeAccountUrl } from "../src/core/http.js";
 
 let directory: string;
 beforeEach(async () => {

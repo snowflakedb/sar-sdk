@@ -15,5 +15,11 @@
  * limitations under the License.
  */
 
-export { createSecrets } from "./secrets.js";
-export type { SecretsClient, SecretsOptions, SecretProvider, PasswordSecret } from "./types.js";
+export { getCallerUserToken } from "./caller.js";
+export { fromDefault, fromToml, fromPlatform } from "./sources.js";
+export { createConnectionOptions } from "./connection-options.js";
+export type {
+  ConnectionOptionsFactoryOptions,
+  ConnectionOptionsProvider,
+  NativeConnectionOptions,
+} from "./connection-options.js";

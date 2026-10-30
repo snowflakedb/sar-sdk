@@ -16,8 +16,8 @@
  */
 
 import type snowflake from "snowflake-sdk";
-import { defined, isSarError, SarError, snowflakeDetails } from "./errors.js";
-import { deadline } from "./lifecycle.js";
+import { defined, isSarError, SarError, snowflakeDetails } from "../core/errors.js";
+import { deadline } from "../core/lifecycle.js";
 
 /** For a query already observed as SUCCESS; getResultsFromQueryId would check its status again. */
 export function fetchResult(

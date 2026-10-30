@@ -18,7 +18,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import type snowflake from "snowflake-sdk";
-import type { DriverModule } from "../src/types.js";
+import type { DriverModule } from "../src/index.js";
 
 type CreatePool = DriverModule["createPool"];
 type Pool = ReturnType<CreatePool>;

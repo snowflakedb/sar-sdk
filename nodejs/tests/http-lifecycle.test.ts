@@ -18,7 +18,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inspect } from "node:util";
 import { EnvHttpProxyAgent, fetch as transportFetch } from "undici";
-import { HttpTransport } from "../src/http.js";
+import { HttpTransport } from "../src/core/http.js";
 
 const transport = vi.hoisted(() => ({ fetch: vi.fn(), destroy: vi.fn() }));
 vi.mock("undici", () => ({

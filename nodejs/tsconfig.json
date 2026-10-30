@@ -5,12 +5,12 @@
     "moduleResolution": "NodeNext",
     "paths": {
       "@snowflake/sar-sdk": ["./src/index.ts"],
-      "@snowflake/sar-sdk/auth": ["./src/auth.ts"],
+      "@snowflake/sar-sdk/auth": ["./src/connection-options/index.ts"],
       "@snowflake/sar-sdk/driver": ["./src/driver.ts"],
-      "@snowflake/sar-sdk/connections": ["./src/connections.ts"],
-      "@snowflake/sar-sdk/query": ["./src/queries.ts"],
-      "@snowflake/sar-sdk/http": ["./src/account-http.ts"],
-      "@snowflake/sar-sdk/secrets": ["./src/secret-client.ts"]
+      "@snowflake/sar-sdk/connections": ["./src/connection-manager/index.ts"],
+      "@snowflake/sar-sdk/query": ["./src/query-client/index.ts"],
+      "@snowflake/sar-sdk/http": ["./src/fetch-client/index.ts"],
+      "@snowflake/sar-sdk/secrets": ["./src/secrets-client/index.ts"]
     },
     "strict": true,
     "noUncheckedIndexedAccess": true,

@@ -16,12 +16,12 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createConnectionManager } from "../src/connections.js";
-import { createConnectionOptions } from "../src/auth.js";
-import { detachedInternals } from "../src/lease.js";
-import { submitDetached } from "../src/detached.js";
+import { createConnectionManager } from "../src/connection-manager/index.js";
+import { createConnectionOptions } from "../src/connection-options/index.js";
+import { detachedInternals } from "../src/connection-manager/lease.js";
+import { submitDetached } from "../src/query-client/detached.js";
 import { deferred, fakeQueryService } from "./fake-query-service.js";
-import type { DetachedQueryOptions } from "../src/types.js";
+import type { DetachedQueryOptions } from "../src/index.js";
 
 afterEach(() => vi.useRealTimers());
 function setup() {

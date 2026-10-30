@@ -19,10 +19,10 @@ import { Readable } from "node:stream";
 import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSarClient } from "../src/index.js";
-import { createConnectionManager } from "../src/connections.js";
-import { createQueryClient } from "../src/queries.js";
-import { temporalSessionSql } from "../src/results.js";
-import type { QueryStreamResult, RowStream, SarClient } from "../src/types.js";
+import { createConnectionManager } from "../src/connection-manager/index.js";
+import { createQueryClient } from "../src/query-client/index.js";
+import { temporalSessionSql } from "../src/query-client/results.js";
+import type { QueryStreamResult, RowStream, SarClient } from "../src/index.js";
 import { failedQueryError } from "./fake-driver.js";
 import { deferred, fakeQueryService } from "./fake-query-service.js";
 

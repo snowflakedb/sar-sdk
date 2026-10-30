@@ -25,12 +25,12 @@ import {
   fromPlatform,
   fromToml,
   type ConnectionOptionsProvider,
-} from "../src/auth.js";
+} from "../src/connection-options/index.js";
 import { createSarClient } from "../src/index.js";
-import { nextSteps, SarError } from "../src/errors.js";
+import { nextSteps, SarError } from "../src/core/errors.js";
 import { fakeDriver } from "./fake-driver.js";
 import { deferred } from "./fake-query-service.js";
-import type { QueryReference, SarClientOptions } from "../src/types.js";
+import type { QueryReference, SarClientOptions } from "../src/index.js";
 
 // Synthetic platform token mounts; no real file under /snowflake is ever read.
 const mountedFiles = vi.hoisted(() => new Map<string, string>());

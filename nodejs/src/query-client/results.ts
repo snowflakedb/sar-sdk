@@ -16,8 +16,33 @@
  */
 
 import type snowflake from "snowflake-sdk";
-import { SarError, fail } from "./errors.js";
-import type { ColumnMetadata, QueryOptions } from "./types.js";
+import { SarError, fail } from "../core/errors.js";
+import type { QueryOptions } from "./query-options.js";
+
+/** Resolved column metadata. Temporal type identifies NTZ, LTZ, or TZ semantics. */
+export interface ColumnMetadata {
+  name: string;
+  type: string;
+  index: number;
+  nullable: boolean;
+  precision: number | null;
+  scale: number | null;
+}
+/** rowCount counts returned rows, not rows affected by DML; see affectedRows. */
+export interface QueryResult<Row = Record<string, unknown>> {
+  rows: Row[];
+  queryId: string;
+  columns: ColumnMetadata[];
+  rowCount: number;
+  /** Rows inserted, updated, deleted, or merged, when Snowflake reports a DML count. */
+  affectedRows?: number;
+}
+/** Single-consumer stream. Break iteration or call close to release the session. */
+export interface RowStream<Row = Record<string, unknown>> extends AsyncIterable<Row> {
+  readonly queryId: string;
+  readonly columns: ColumnMetadata[];
+  close(): Promise<void>;
+}
 
 // Only these scalar families stringify SQL NULL as this sentinel in driver 3.3.0.
 // Never apply this to text or VARIANT, whose contents can legitimately be "NULL".

@@ -15,26 +15,5 @@
  * limitations under the License.
  */
 
-export { createQueryClient } from "./query.js";
-export type {
-  QueryClient,
-  QueryScope,
-  ScopedQueryClient,
-  QueryClientOptions,
-  QueryOptions,
-  QueryResult,
-  QueryHandle,
-  RowStream,
-  Transaction,
-  TransactionOptions,
-  TransactionQueryOptions,
-  QueryIdentity,
-  QueryReference,
-  DetachedQueryOptions,
-  QueryLookupOptions,
-  PollQueryOptions,
-  QueryPollResult,
-  QueryStreamResult,
-  QueryCancellation,
-  DetachedQueryScope,
-} from "./types.js";
+export { createFetchClient } from "./fetch-client.js";
+export type { FetchClient, FetchClientOptions, FetchInit, FetchScope } from "./fetch-client.js";

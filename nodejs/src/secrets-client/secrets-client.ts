@@ -17,17 +17,36 @@
 
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { SarError, fail, keys } from "./errors.js";
-import { HttpTransport } from "./http.js";
-import type {
-  PasswordSecret,
-  SarClientOptions,
-  SecretProvider,
-  Secrets,
-  SecretsClient,
-  SecretsOptions,
-} from "./types.js";
-export type { SecretsClient, SecretsOptions } from "./types.js";
+import { SarError, fail, keys } from "../core/errors.js";
+import { HttpTransport } from "../core/http.js";
+
+/** Username and password are resolved together from a single source. */
+export interface PasswordSecret {
+  username: string;
+  password: string;
+}
+/** Secret source may return undefined only when absent, not when revoked. */
+export interface SecretProvider {
+  readonly id: string;
+  resolve(
+    name: string,
+    type: "string" | "password" | "accessToken",
+  ): Promise<string | PasswordSecret | undefined>;
+}
+/** No SQL authentication is performed by these methods. */
+export interface Secrets {
+  getString(name: string): Promise<string>;
+  getPassword(name: string): Promise<PasswordSecret>;
+  getAccessToken(name: string): Promise<string>;
+}
+export interface SecretsOptions {
+  directory?: string;
+  envPrefix?: string;
+  providers?: readonly SecretProvider[];
+}
+export interface SecretsClient extends Secrets {
+  close(): Promise<void>;
+}
 
 /** Standalone secrets own their HTTP transport and never resolve SQL credentials. */
 export function createSecrets(options: SecretsOptions = {}): SecretsClient {
@@ -67,7 +86,7 @@ type TokenGeneration = {
 };
 
 export function createSecretStore(
-  options: SarClientOptions["secrets"],
+  options: SecretsOptions | undefined,
   http: HttpTransport,
   assertOpen: () => void,
 ): Secrets & { close(): void } {

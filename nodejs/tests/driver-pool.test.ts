@@ -16,9 +16,9 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createConnectionManager } from "../src/connections.js";
-import { createConnectionOptions } from "../src/auth.js";
-import type { ConnectionManagerOptions, PoolOptions } from "../src/types.js";
+import { createConnectionManager } from "../src/connection-manager/index.js";
+import { createConnectionOptions } from "../src/connection-options/index.js";
+import type { ConnectionManagerOptions, PoolOptions } from "../src/index.js";
 import { fakeDriver } from "./fake-driver.js";
 
 afterEach(() => {

@@ -21,7 +21,12 @@ import {
   type RequestInit as TransportInit,
 } from "undici";
 import { SarError, fail } from "./errors.js";
-import type { FetchInit } from "./types.js";
+
+/** Standard fetch options plus a per-request deadline. */
+export type FetchInit = RequestInit & {
+  /** Deadline for this request, including reading its body. Overrides `timeouts.httpMs`. */
+  timeoutMs?: number;
+};
 
 /**
  * The deadline and shutdown signal remain attached to the original response body

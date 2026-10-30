@@ -18,16 +18,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type snowflake from "snowflake-sdk";
 import { createSarClient, type SarError } from "../src/index.js";
-import { createConnectionOptions } from "../src/auth.js";
-import { createConnectionManager } from "../src/connections.js";
-import { createQueryClient } from "../src/queries.js";
-import { temporalSessionSql } from "../src/results.js";
+import { createConnectionOptions } from "../src/connection-options/index.js";
+import { createConnectionManager } from "../src/connection-manager/index.js";
+import { createQueryClient } from "../src/query-client/index.js";
+import { temporalSessionSql } from "../src/query-client/results.js";
 import type {
   SarClientOptions,
   Transaction,
   TransactionOptions,
   TransactionQueryOptions,
-} from "../src/types.js";
+} from "../src/index.js";
 import { failedQueryError, fakeDriver } from "./fake-driver.js";
 
 type FakeOptions = Parameters<typeof fakeDriver>[0];

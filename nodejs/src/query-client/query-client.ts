@@ -17,7 +17,12 @@
 
 import type snowflake from "snowflake-sdk";
 import { failedQuery, fetchResult, queryState, statementFailure } from "./driver-adapter.js";
-import { connectionInternals, detachedInternals, completion, type Lease } from "./lease.js";
+import {
+  connectionInternals,
+  detachedInternals,
+  completion,
+  type Lease,
+} from "../connection-manager/lease.js";
 import { createDetachedScope } from "./detached.js";
 import {
   cancellationDetails,
@@ -30,15 +35,15 @@ import {
   SarError,
   signalOption,
   snowflakeDetails,
-} from "./errors.js";
-import { checkAbort, deadline, elapsed, pause } from "./lifecycle.js";
+} from "../core/errors.js";
+import { checkAbort, deadline, elapsed, pause } from "../core/lifecycle.js";
 import {
-  clientOptions,
   queryOptions,
+  resultOptions,
   transactionOptions,
   transactionQueryOptions,
   type ResolvedQuery,
-} from "./options.js";
+} from "./query-options.js";
 import {
   convertRow,
   dmlCount,
@@ -49,27 +54,73 @@ import {
   temporalResetSql,
   temporalSessionSql,
 } from "./results.js";
+import type { CallerContext } from "../connection-options/caller.js";
+import type { ConnectionManager } from "../connection-manager/connection-manager.js";
+import type { ConnectionScope } from "../connection-manager/lease.js";
+import type { CloseOptions, LogEvent } from "../core/lifecycle.js";
+import { timeoutOptions, type TimeoutOptions } from "../core/timeouts.js";
+import type { DetachedQueryScope } from "./detached.js";
+import type { PollQueryOptions, QueryReference } from "./detached-options.js";
 import type {
-  CallerContext,
-  ConnectionManager,
-  ConnectionScope,
-  QueryClient,
-  ScopedQueryClient,
-  QueryScope,
-  QueryClientOptions,
-  CloseOptions,
-  LogEvent,
-  PollQueryOptions,
-  QueryHandle,
   QueryOptions,
-  QueryReference,
-  QueryResult,
-  RowStream,
-  Transaction,
+  ResultOptions,
   TransactionOptions,
   TransactionQueryOptions,
-} from "./types.js";
-export type { QueryClient, QueryScope, ScopedQueryClient, QueryClientOptions } from "./types.js";
+} from "./query-options.js";
+import type { QueryResult, RowStream } from "./results.js";
+
+export type QueryClientOptions = {
+  results?: ResultOptions;
+  timeouts?: TimeoutOptions;
+  handleIdleTimeoutMs?: number;
+};
+/** A process-local handle. Repeated result calls never resubmit the statement. */
+export interface QueryHandle<Row = Record<string, unknown>> {
+  readonly queryId: string;
+  /** Server execution status; local result failures do not rewrite a known SUCCESS. */
+  status(): Promise<string>;
+  /** First call chooses deadlines and memoizes its result or failure. Never resubmits SQL. */
+  result(options?: { signal?: AbortSignal; waitTimeoutMs?: number }): Promise<QueryResult<Row>>;
+  /** Idempotent local cancellation/disposal, with best-effort server cancellation. */
+  cancel(): Promise<void>;
+}
+/** Runs statements on the transaction's session one at a time, in call order. */
+export interface Transaction {
+  /** Materialized result, as from query(). Rejects once the transaction has ended. */
+  query<Row = Record<string, unknown>>(
+    sql: string,
+    options?: TransactionQueryOptions,
+  ): Promise<QueryResult<Row>>;
+}
+export interface QueryScope extends DetachedQueryScope {
+  query<Row = Record<string, unknown>>(
+    sql: string,
+    options?: QueryOptions,
+  ): Promise<QueryResult<Row>>;
+  stream<Row = Record<string, unknown>>(
+    sql: string,
+    options?: QueryOptions,
+  ): Promise<RowStream<Row>>;
+  submit<Row = Record<string, unknown>>(
+    sql: string,
+    options?: QueryOptions,
+  ): Promise<QueryHandle<Row>>;
+  /**
+   * Run the callback's statements in one transaction on one session: BEGIN, then COMMIT when the
+   * callback's Promise fulfills or ROLLBACK when it rejects. A failed COMMIT has an unknown
+   * outcome. Never retries SQL.
+   */
+  transaction<T>(
+    callback: (tx: Transaction) => Promise<T>,
+    options?: TransactionOptions,
+  ): Promise<T>;
+}
+export interface ScopedQueryClient extends QueryScope {
+  close(options?: CloseOptions): Promise<void>;
+}
+export interface QueryClient extends ScopedQueryClient {
+  asCaller(context: CallerContext): QueryScope;
+}
 const factories = new WeakMap<ScopedQueryClient, (scope: ConnectionScope) => QueryScope>();
 const firstPollIntervalMs = 25;
 const rollbackTimeoutMs = 5_000;
@@ -203,7 +254,10 @@ export function createQueryClient(
 ): QueryClient | ScopedQueryClient {
   keys(input, ["results", "timeouts", "handleIdleTimeoutMs"], "query client");
   duration(input.handleIdleTimeoutMs, "handleIdleTimeoutMs");
-  const options = clientOptions({ results: input.results, timeouts: input.timeouts });
+  const options = {
+    results: resultOptions(input.results),
+    timeouts: timeoutOptions(input.timeouts),
+  };
   const rootInternals = connectionInternals(connections);
   const handleIdleTimeoutMs = input.handleIdleTimeoutMs ?? rootInternals.handleIdleTimeoutMs;
   const leases = new Set<Lease>();
