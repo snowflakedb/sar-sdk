@@ -1,0 +1,871 @@
+<!--
+Copyright 2026 Snowflake Inc.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
+# @snowflake/sar-sdk
+
+A framework-neutral, server-side Node.js SDK for **Snowflake App Runtime (SAR)**, built on
+`snowflake-sdk`. It separates Snowflake access from application frameworks: caller identity,
+owned SQL sessions, bounded results, secrets, and account HTTP. Its clients are independent and
+lazy. Node.js server code only; not for browsers or Edge. This is a development package, and it
+doesn't replace the Snowflake Node.js driver.
+
+Browser applications call their own authenticated backend endpoints and schedule
+polling themselves. The SDK provides no client-side query or polling utilities
+today; those may be added in the future. Keep Snowflake credentials and saved
+query references on the server.
+
+## Getting started
+
+```sh
+npm install @snowflake/sar-sdk
+```
+
+Before 1.0, a breaking change bumps the minor version, so `^0.1.0` never installs one. Read the
+[changelog](CHANGELOG.md) before upgrading.
+
+### Configure TypeScript
+
+The tested TypeScript baseline is 5.9. Use `module`/`moduleResolution: "NodeNext"` (Node.js)
+or `moduleResolution: "Bundler"` (a server bundler), and Node.js type declarations.
+Both ESM and CommonJS declarations are included. Node >=22 is required.
+JavaScript consumers need no TypeScript compiler. The tested driver is exactly 3.4.0.
+
+```ts
+import { createSarClient } from "@snowflake/sar-sdk";
+
+// Connection options come from fromDefault(), read only when work needs them.
+const client = createSarClient();
+try {
+  const result = await client.query("SELECT CURRENT_USER() AS USER_NAME");
+  console.log(result.rows);
+} finally {
+  await client.close();
+}
+```
+
+## Common tasks
+
+Create one client per server process, reuse it across requests, and close it at shutdown.
+Frameworks that reload modules during development can keep it on `globalThis`. `fromDefault()`
+reads the platform's credentials when deployed and a SnowCLI profile locally
+([Configuration](#configuration)):
+
+```ts
+import { createSarClient, type SarClient } from "@snowflake/sar-sdk";
+import { createConnectionOptions, fromDefault } from "@snowflake/sar-sdk/auth";
+
+const cache = globalThis as typeof globalThis & { snowflake?: SarClient };
+export const snowflake = (cache.snowflake ??= createSarClient(
+  createConnectionOptions(fromDefault(), {
+    callerAsOwner: process.env.NODE_ENV === "development",
+  }),
+));
+```
+
+`createSarClient` takes one of three forms:
+
+| Form                                                           | Use it for                                                           |
+| -------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `createSarClient()`                                            | The default connection options, `fromDefault()`                      |
+| `createSarClient(connectionOptions)`                           | One provider, such as a TOML profile or `callerAsOwner`              |
+| `createSarClient({ queryClient, fetchClient, secretsClient })` | Anything else; see [Independent components](#independent-components) |
+
+The first two build every component from the same connection options, so SQL and `fetch` use
+the same identity. Any other input throws `INVALID_OPTIONS`.
+
+Run SQL as the app, passing values as binds rather than building SQL strings:
+
+```ts
+const { rows } = await snowflake.query("SELECT NAME, PRICE FROM PRODUCTS WHERE ID = ?", {
+  binds: [id],
+});
+```
+
+Rows are objects keyed by column name, upper case unless quoted in SQL. In the default JSON
+format, NUMBER values are decimal strings, so convert them where a JavaScript number is exact.
+See [Queries and Ownership](#queries-and-ownership) for every type.
+
+Run SQL as the signed-in user with a caller view built from the request's headers. Use it only
+within that request:
+
+```ts
+export async function GET(request: Request) {
+  const caller = snowflake.asCaller({ headers: request.headers });
+  const { rows } = await caller.query("SELECT CURRENT_USER() AS NAME");
+  return Response.json(rows[0]);
+}
+```
+
+Caller queries use the user's default role and warehouse. Pass `warehouse` per query, or set
+`SNOWFLAKE_WAREHOUSE` in the app's environment, for users without a default warehouse.
+A caller view without caller headers throws `CALLER_CONTEXT_REQUIRED`. To run caller views as the
+app, such as in development, create the options with
+`createConnectionOptions(connection, { callerAsOwner: process.env.NODE_ENV === "development" })`.
+[Caller Context](#caller-context) describes both.
+
+Handle failures by their stable `code`. When Snowflake rejects a query, `details.errorCode` holds
+its error code:
+
+```ts
+import { isSarError } from "@snowflake/sar-sdk";
+
+try {
+  await snowflake.query("UPDATE ORDERS SET STATUS = 'SHIPPED' WHERE ID = ?", { binds: [id] });
+} catch (error) {
+  if (isSarError(error) && error.details.errorCode === "002003")
+    return new Response("Orders table unavailable", { status: 503 });
+  throw error;
+}
+```
+
+The SDK never retries SQL. Before retrying a write yourself, check `details.completion`:
+`"succeeded"` means the statement ran even though reading its result failed, and `"unknown"`
+means it may have.
+
+Stream results too large for `query()`, which stops at 100,000 rows or 32 MiB by default.
+Leaving the loop early releases the session:
+
+```ts
+const stream = await snowflake.stream("SELECT * FROM EVENTS ORDER BY CREATED_AT");
+for await (const row of stream) await write(row);
+```
+
+Each operation runs in its own session. For transactions, temporary tables, or session variables
+that span statements, use `withConnection` (see [Queries and Ownership](#queries-and-ownership)).
+For work that outlives a request, see
+[Detached queries](#detached-queries-across-requests-and-instances). Read app secrets with
+`snowflake.secrets.getString(name)`, and quiet the driver's per-connection logging as shown in
+[Diagnostics and Driver Injection](#diagnostics-and-driver-injection).
+
+## Independent components
+
+Use only the layers you need. `createSarClient` only composes these same components, so
+native driver access doesn't require it. Build the components yourself to set a `logger`,
+`driver`, or `pool` on the connection manager, result or timeout settings on the query client,
+or different connection options for SQL and `fetch`, then pass all three to
+`createSarClient({ queryClient, fetchClient, secretsClient })`. Its `close()` closes all three.
+In a caller view, SQL uses the query client's connection options and `fetch` uses the fetch
+client's.
+
+```ts
+import { createConnectionOptions, fromToml } from "@snowflake/sar-sdk/auth";
+import { createConnectionManager } from "@snowflake/sar-sdk/connections";
+import { createQueryClient } from "@snowflake/sar-sdk/query";
+import { createFetchClient } from "@snowflake/sar-sdk/http";
+import { createSecretsClient } from "@snowflake/sar-sdk/secrets";
+
+const auth = createConnectionOptions(fromToml({ name: "dev" }), { callerAsOwner: true });
+const connections = createConnectionManager(auth);
+const queries = createQueryClient(connections);
+const http = createFetchClient(auth);
+const secrets = createSecretsClient();
+
+try {
+  await connections.withConnection(async (connection) => {
+    await new Promise<void>((resolve, reject) => {
+      connection.execute({
+        sqlText: "SELECT CURRENT_USER()",
+        complete(error) {
+          if (error) reject(error);
+          else resolve();
+        },
+      });
+    });
+  });
+  const result = await queries.query("SELECT CURRENT_USER() AS USER_NAME");
+} finally {
+  // Closing the query client also closes the manager it was built from.
+  await Promise.all([queries.close(), http.close(), secrets.close()]);
+}
+```
+
+The native callback must return a Promise and await all driver execution and streaming.
+Returning `connection.execute(...)` directly is rejected: a Statement is not completion.
+A query client closes the manager it was built from: `close()` stops the manager's new work at
+once, and the query client's work and the manager's share one grace period, the `close()`
+`timeoutMs` or else the query client's `timeouts.closeMs`. The manager's own `closeMs` applies
+only when you close the manager directly. Query clients may share a manager, but closing any of
+them closes it for all of them; give each its own manager to close them separately. Separate
+managers each have their own connection limit, and the check that keeps a caller's other work out
+of that caller's open SPCS transaction only sees work on its own manager. An options provider holds no resources, so there is nothing to close.
+`createConnectionOptions()`, `createConnectionManager()`, and `createFetchClient()` without
+connection options use `fromDefault()`, read only when work needs them.
+
+`getOwnerOptions()` and `getCallerOptions(token)` synchronously return fresh mutable
+`snowflake-sdk` connection options. They do not log in or open SQL. Results contain secrets:
+never log, serialize, or return them to HTTP callers. Custom structural providers implement the
+same two getters. They are trusted application code responsible for caller policy.
+
+```ts
+import snowflake from "snowflake-sdk";
+const connection = snowflake.createConnection(auth.getOwnerOptions());
+// The application connects, awaits native execution, and destroys the connection.
+```
+
+`snowflake.createPool(auth.getOwnerOptions(), { min: 0, max: 4 })` also works,
+but captures one credential snapshot. It does not call the getter for future connections.
+Use the SDK manager or an application-owned resource factory for rotating login credentials.
+Native pools require application-owned identity isolation, reset, and `drain()` plus `clear()`
+cleanup. Native results do not inherit SDK conversion, row limits, or query lifecycle helpers.
+
+Standalone secrets expose the three getters plus `close()`. Standalone fetch exposes
+`fetch`, `asCaller`, and `close`; neither requires SQL. `createQueryClient()` accepts
+either a manager or a caller-scoped connection view. The latter cannot switch identity.
+Result/timeouts and `handleIdleTimeoutMs` may be configured on the query client.
+
+## Caller Context
+
+```ts
+const caller = client.asCaller({ headers: request.headers });
+const result = await caller.query("SELECT ID FROM ORDERS WHERE STATUS = ?", {
+  binds: ["OPEN"],
+});
+```
+
+The SDK knows the Snowflake header name. Headers must come from trusted platform
+ingress; extraction is not authentication. A caller view has query, stream, submit,
+transaction, detached-query, withConnection, and fetch operations, but no app secrets or parent
+close.
+Never retain a caller view beyond its request/job.
+
+For raw driver work as the caller, call `withConnection` on a caller view:
+
+```ts
+const id = await client
+  .asCaller({ headers: request.headers })
+  .withConnection(async (connection) => connection.getId());
+```
+
+`client.withConnection(callback)` uses the app identity and takes only the callback; options
+such as `{ asCaller: true, headers }` throw `INVALID_OPTIONS`. Caller views cannot switch back to
+the app identity.
+
+Caller options combine the caller's token with the connection's `token` value the way each
+platform's caller logins expect: `getCallerOptions(token)` returns the owner options with `token`
+set to `<owner token>.<caller token>` when the owner token contains a dot, as SPCS's JWT service
+token does, and to the caller's token alone when the owner token is opaque, as on Serverless.
+This works only for the authenticators whose login sends `token`: `OAUTH` and
+`PROGRAMMATIC_ACCESS_TOKEN`, as `fromPlatform()` provides. For any other authenticator, such as
+`SNOWFLAKE` with a password, key-pair or browser login, the driver ignores `token`, so the caller's
+identity would be dropped and the session would log in as the owner. `getCallerOptions()` and
+`asCaller()` throw `AUTH_NOT_SUPPORTED` for those, and for a connection with no `token`, unless the
+options were created with `callerAsOwner: true`. The SDK never parses either token as a JWT.
+
+There is no fallback: a caller view without caller headers throws `CALLER_CONTEXT_REQUIRED`, and so
+do present-but-empty headers and explicit empty tokens. The SDK doesn't detect local development
+or the platform. Pass the connection options your environment needs.
+
+`callerAsOwner: true`, an option of `createConnectionOptions()`, runs every caller view as the app,
+even when caller context is present or missing. Use it where caller's rights don't work for your
+app yet: on a local server, where your connection can't carry a caller's token, or in Snowflake
+Workspaces preview, which sends a valid caller token that doesn't behave as apps need. Caller views
+then use the app's credentials for queries, `withConnection`, and `fetch`, follow owner session
+rules instead of the caller-view reuse described below, and save `mode: "owner"` detached
+references. `getCallerOptions()` returns owner options. Present caller context is still validated,
+so malformed headers and empty tokens still fail. The SDK doesn't decide when to set it: pass your
+app's own condition, and change it once the platform supports what your app needs.
+
+```ts
+const client = createSarClient(
+  createConnectionOptions(connection, {
+    callerAsOwner: process.env.NODE_ENV === "development",
+  }),
+);
+```
+
+A caller view reuses its sessions. Its first operation logs in, and later operations in the same
+view run on that session, or on additional sessions when they run concurrently, without logging in
+again. They keep working after the caller token expires, which is two minutes after the request by
+default (`SERVICE_CALLER_TOKEN_VALIDITY_SECS`). Sessions are reused only within the same
+`asCaller()` view and warehouse. An operation that fails, is aborted, or leaves a stream early
+retires its session instead. Session changes an operation makes, such as `USE` or session
+variables, are visible to the view's later operations.
+
+On SPCS, Snowflake gives every login with the same caller token one Snowflake session, so a
+request's caller work shares session state across views and concurrent operations: session
+variables, `USE` and `ALTER SESSION` changes, temporary tables, and an open transaction. A caller
+`transaction()` therefore runs alone. While it's open, other SQL for the same caller context fails
+with `INVALID_OPTIONS` instead of running inside the transaction; run that SQL with `tx.query()` or
+after the transaction ends. A caller transaction also refuses to start while other SQL for that
+caller context is running, such as an unfinished stream or `submit()` handle. The client enforces
+this on every platform, for all of its views; it doesn't check `fetch()` requests, which use the
+same Snowflake session on SPCS, or other clients.
+
+Snowflake stops accepting a caller token for new logins once any session made from it logs out, so
+the view's sessions log out together after it has had no session in use for 60 seconds, or when the
+client closes. A view idle for longer can't log in again, which is one more reason to keep it within
+one request. Sessions waiting for reuse or logout don't count toward `maxConnections`. Caller
+sessions use the calling user's default role and warehouse; for users without a default warehouse,
+pass `warehouse` per query or set `SNOWFLAKE_WAREHOUSE` in the app's environment.
+
+Caller's rights on SPCS and Serverless are restricted: a caller session can do only what both the
+caller and the app owner role's caller grants allow. Grant these on the warehouse a caller's queries
+run on, which is the caller's default warehouse unless you pass `warehouse`:
+
+- `CALLER USAGE`, to run caller queries that need a warehouse.
+- `CALLER MONITOR`, to look up a caller's detached query from a later request, with
+  `getQueryStatus()`, `pollQuery()`, `streamQuery()`, or `cancelQuery()`. Without it, Snowflake
+  has no data for the query even though it was submitted, and the SDK throws `QUERY_UNAVAILABLE`
+  with a `nextStep` naming the grant.
+- `CALLER OPERATE`, to cancel a caller's query, with `cancelQuery()` or a `submit()` handle's
+  `cancel()`. Without it, Snowflake refuses with error `003001` and the query keeps running; the
+  SDK throws `QUERY_FAILED` with that `errorCode` and a `nextStep` naming the grant.
+
+```sql
+GRANT CALLER USAGE ON WAREHOUSE <warehouse> TO ROLE <app owner role>;
+GRANT CALLER MONITOR ON WAREHOUSE <warehouse> TO ROLE <app owner role>;
+GRANT CALLER OPERATE ON WAREHOUSE <warehouse> TO ROLE <app owner role>;
+```
+
+## Configuration
+
+`createConnectionOptions(connection, { callerAsOwner? })` takes the Snowflake driver's connection
+options and nothing else, so your application chooses where they come from. Three helpers read
+common sources and return plain connection options:
+
+- `fromDefault()` uses `fromPlatform()` when the service has mounted its token and `fromToml()`
+  otherwise, so the app needs no `NODE_ENV` check to pick a source. It takes no options: locally it
+  reads the default profile. To pick a profile or a source yourself, call `fromToml()` or
+  `fromPlatform()` directly.
+- `fromToml({ name?, configFile? })` reads a SnowCLI-compatible profile.
+- `fromPlatform()` reads the OAuth token a Snowflake-hosted service mounts at
+  `/snowflake/session/token`, the same on SPCS and Serverless, and the account and endpoint it sets
+  in `SNOWFLAKE_*` variables.
+
+Anything else is a literal object, such as options you assemble from your own environment variables.
+The usual arrangement reads the platform's credentials when deployed and a profile locally. Choosing
+whether caller views run as the app is still your decision:
+
+```ts
+import { createConnectionOptions, fromDefault } from "@snowflake/sar-sdk/auth";
+
+const client = createSarClient(
+  createConnectionOptions(fromDefault(), {
+    callerAsOwner: process.env.NODE_ENV === "development",
+  }),
+);
+```
+
+The SDK detects no environment or platform beyond `fromDefault()` checking for the mounted token,
+and consults no `SNOWFLAKE_*` variable except inside `fromPlatform()` and `SNOWFLAKE_HOME`, which
+locates the SnowCLI configuration directory. Every option the driver accepts belongs in the connection options, including proxy settings and
+credential caching. The SDK sets `application`, `clientSessionKeepAlive`, and
+`serverSessionKeepAlive` itself, and sets `accessUrl` from your account or host. Separate `region`
+is rejected; use a region-qualified account identifier or an explicit HTTPS endpoint. Inherited
+`sessionToken` and `masterToken` are rejected.
+
+`fromToml` supports `config.toml` and `connections.toml`, conventional top-level connection tables
+and nested `connections` tables, `SNOWFLAKE_HOME`, an explicit `configFile`, `~/.snowflake`, and
+documented macOS/Windows/Linux configuration directories. Without `name`, it reads the file's
+`default_connection_name`, then `default`. A missing profile throws `CONFIG_NOT_FOUND`; it never
+selects the first entry. `connections.toml` replaces connection definitions from `config.toml`.
+Relative key/token paths resolve against the configuration directory, not the process working
+directory. On POSIX, configuration files must be private (`0600`). It does not shell out to
+SnowCLI or other tools, does not read private credential caches, and applies no environment
+overrides. Other tools share these profiles, so keys the SDK doesn't use, such as
+`oauth_enable_refresh_tokens`, are dropped instead of failing; a misspelled key is dropped too.
+Keys the SDK uses are type-checked. A profile's `token_file_path` becomes a `token` that is read
+from the file each time options are requested.
+
+Options are read each time `getOwnerOptions()` or `getCallerOptions()` runs, so a `token` property
+that is a getter rotates without recreating anything. `fromPlatform()` and a profile's
+`token_file_path` return such a getter. A literal object's values are fixed: rebuild the options
+after changing them.
+
+Supported credentials are whatever the driver supports: OAuth, PAT, password, key pairs, and
+driver-managed login flows. Driver-managed interactive logins, such as `EXTERNALBROWSER`, open a
+browser, so use them only where one can open. The SDK serializes those logins; native consumers
+manage login concurrency themselves. The SDK does not cache SQL login tokens; its separate
+client-credentials secret cache is described below. Configuration failures carry a
+`details.nextStep` hint, which `toJSON()` includes; hints never contain file paths or credentials.
+
+## Queries and Ownership
+
+By default each owner operation owns a fresh SQL session, and a caller view reuses its own sessions
+(see [Caller Context](#caller-context)). Run a multi-statement transaction with
+`transaction(async (tx) => ...)`, described below. For other raw driver work, such as temporary
+objects that span statements, use `withConnection(async connection => ...)`. Await all
+work inside the callback; do not retain or destroy the connection. The SDK
+discards it afterward. Arbitrary SQL is not read-only merely because binds are
+used. Authorization remains the responsibility of Snowflake and the app.
+
+```ts
+await client.transaction(async (tx) => {
+  await tx.query("UPDATE ACCOUNTS SET BALANCE = BALANCE - ? WHERE ID = ?", { binds: [100, "A"] });
+  await tx.query("UPDATE ACCOUNTS SET BALANCE = BALANCE + ? WHERE ID = ?", { binds: [100, "B"] });
+});
+```
+
+`transaction()` holds one session for the whole callback, with the same limits and owner or caller
+scope as other operations. It runs BEGIN, then the callback, then COMMIT when the callback's Promise
+fulfills, and resolves with its value even if releasing the session afterward fails. If the Promise
+rejects, ROLLBACK runs and the callback's error is rethrown. `tx.query()` returns what `query()`
+returns, with the same conversion, limits, and errors. Concurrent calls run one at a time in call
+order; calls after the transaction ends are rejected. Await every statement: a callback that
+returns with one outstanding rolls back and throws `INVALID_OPTIONS`. A failed COMMIT throws
+`QUERY_FAILED` with `completion: "unknown"`. SQL is never retried. A caller transaction runs alone
+for its caller context, because caller sessions share a Snowflake session on SPCS; see
+[Caller Context](#caller-context).
+
+Statement options exclude `format`, `warehouse`, `acquireTimeoutMs`, and `authTimeoutMs`; pass
+those, and `signal`, to `transaction()`. `format` defaults to the client's, and JSON sets the
+temporal formats once, before BEGIN. DDL, such as `CREATE TEMPORARY TABLE`, implicitly commits an
+open transaction in Snowflake, so keep it out of the callback. A failed statement doesn't end the
+transaction unless the callback rejects.
+
+Aborting the transaction's `signal` cancels the running statement, runs ROLLBACK, and discards the
+session. Shutdown discards it without ROLLBACK; Snowflake rolls back a transaction still open when
+its session ends. A caller view's discarded sessions log out once the view has been idle for 60
+seconds or the client closes (see Caller Context), so a caller transaction discarded without
+ROLLBACK stays open until then. A statement's own `signal` or deadline cancels only that statement.
+If a cancellation can't be confirmed, no more SQL runs, not even ROLLBACK, and the session is
+discarded; a ROLLBACK that fails or takes over 5 seconds also discards it.
+
+Defaults: 10 active connections, 100 queued operations, 30-second acquisition,
+120-second authentication, 600-second query wait, 120-second result consumption,
+300-second abandoned-handle cleanup, and 10-second graceful shutdown. These are
+configurable initial limits, not performance recommendations for every app.
+`query()` and `stream()` send a statement and wait for it in one driver request: Snowflake holds the
+request while the statement runs and returns its first results with the response. A `submit()`
+handle and a transaction statement are submitted asynchronously instead; while they run, status
+checks start after 25 ms and back off to `pollIntervalMs`, 1 second by default.
+In isolated mode, `query()` returns, and stream iteration ends, once the last row is read;
+the session then logs out in the background. Until it does, it counts toward
+`activeConnections` and `maxConnections`, and `close()` waits for it. A failed logout
+doesn't fail rows that were already read.
+`connect()` validates connectivity with a temporary owned session.
+In default `pool.mode: "isolated"`, `pool` configures concurrency and queue limits,
+not reuse. `maxQueue: 0` rejects work when all admission slots are occupied.
+
+### Optional reusable sessions
+
+Set `pool: { mode: "reusable", reset: async connection => { /* app-specific reset */ } }`
+on the manager or aggregate client. A reset hook is mandatory; it must restore all
+state your app can change. There is no universal reset for arbitrary SQL. Keep isolated
+mode unless you can constrain transactions, variables, temporary objects, and context.
+In JSON mode, query helpers set temporal output formats; reset must restore them before
+a later native borrower if your application expects different formats. Warehouse overrides
+are separate pool partitions. `examples/composition.ts` shows a deliberately narrow contract.
+
+Every session, in either mode, comes from the Node driver's own connection pools, created with
+`snowflake.createPool()`: one per identity scope and warehouse override, and separate ones for
+detached queries. The SDK sets each pool's size from `maxConnections`, its idle timeout from
+`idleTimeoutMs`, and opens sessions on demand; its queue and acquisition deadline stay with the
+SDK. Pass any other driver pool option in `pool.driverPoolOptions`, such as `fifo`,
+`testOnBorrow`, or `evictionRunIntervalMillis` with `softIdleTimeoutMillis`. The SDK forwards
+these unchanged, so options added in later driver versions need no SDK change; it rejects only
+`max`, `min`, `acquireTimeoutMillis`, `maxWaitingClients`, and `idleTimeoutMillis`, which it sets
+itself. The driver's pool reports a failed login by its message only, so `AUTH_FAILED` from a
+failed login has no `details.errorCode`.
+
+Each session has one borrower at a time, including the entire stream/handle lifetime.
+Complete success runs reset before release; errors, early stream exit, cancellation,
+or failed reset discard the session. No application SQL is retried automatically.
+Connections are reused only within the same owner scope or immutable caller view;
+separate `asCaller()` calls never share connections, even with identical tokens, though on SPCS
+Snowflake gives same-token connections one session ([Caller Context](#caller-context)). With
+`callerAsOwner: true`, caller views use the owner scope and share its sessions. Do not
+retain caller views across requests/jobs or treat reuse as proof of current authorization.
+
+`maxConnections` covers local physical connections globally, including connecting, borrowed,
+resetting, and idle sessions. Unmatched idle sessions can be evicted for another scope.
+Defaults: idle timeout 60 seconds, maximum lifetime 30 minutes, reset timeout 5 seconds.
+Configure `idleTimeoutMs`, `maxLifetimeMs`, and `resetTimeoutMs` only in reusable mode.
+Lifetime expiry retires a borrowed session on release; it does not interrupt its work.
+Local cleanup deadlines do not imply physical destruction: a pending driver destroy
+retains its physical slot until it settles. Shutdown can still report a deadline failure.
+Mounted credential rotation does not evict established sessions. New logins read
+the current token; idle reuse does not read credentials again.
+
+`query()` returns `{ rows, queryId, columns, rowCount }`, plus `affectedRows` when Snowflake
+reports a DML count: the rows inserted, updated, deleted, or merged, counting each updated row
+once even when an UPDATE joins it to several source rows. `rowCount` is returned
+rows, not affected rows. JSON format preserves numeric values as strings,
+temporal strings with nanosecond formatting and type metadata, binary as base64,
+SQL null as null, and raw JSON text for unstructured VARIANT. Set `numbers: "number"`, as in
+`createQueryClient(connections, { results: { numbers: "number" } })` or per query, to get JavaScript numbers.
+A NUMBER value converts only when that is exact: a safe integer, or a decimal such as `12.50`
+whose JavaScript number has the same digits. A FLOAT value converts when finite, from the same
+text that string mode returns; Snowflake rounds that text to about 15 significant digits. Other
+values, such as `9007199254740993` or a FLOAT `NaN`, fail with `RESULT_CONVERSION_UNSUPPORTED`
+instead of being rounded; use `numbers: "string"`, or cast the column to VARCHAR. The error names
+a column whose name is a plain identifier, and otherwise gives its position. Native format
+ignores `numbers`. Unsupported lossy
+driver representations fail instead of being advertised as lossless. OBJECT/ARRAY/MAP
+columns, including unstructured containers, are rejected in JSON format because the driver
+parses them and can round large numbers. Cast such a column to VARIANT, for example
+`ARRAY_AGG(x)::VARIANT`, to receive its exact JSON text, or use
+`format: "native"` for explicit driver conversion. Duplicate names require SQL
+aliases or `rowMode: "array"`. Both errors suggest a fix in `details.nextStep`. Error messages
+name a column only when its name is a plain identifier, and otherwise give its position: an
+unaliased expression's column name is its SQL text, which can contain literals. Generic row
+types are assertions; `decodeRow` can perform runtime validation.
+`decodeRow` must be synchronous; a returned Promise is rejected. In JSON mode,
+metadata-specific normalization preserves typed scalar SQL NULL without rewriting
+text `"NULL"` or VARIANT JSON null. No driver-global conversion option is changed.
+Native mode deliberately preserves the selected driver's behavior and quirks.
+
+Materialization stops at 100,000 rows or 32 MiB of serialized decoded rows by
+default. These are payload limits, not a strict bound on driver/network/heap
+buffers. For larger results use `stream()`, a single-consumer async iterable;
+break iteration or call `close()` to release its session.
+
+`submit()` returns a process-local handle with `queryId`, `status()`, `result()`,
+and `cancel()`. The first result call chooses its wait options; concurrent and
+later calls share that promise. It never resubmits SQL. Completed materialized
+results remain on the handle while the application retains it. Abandoned handles
+are cancelled best-effort after the idle deadline.
+Aborting the submission signal also disposes an unconsumed handle. A known terminal
+server status remains available after cancellation; cancellation does not reverse execution.
+`status()` reports the driver's server status, not local consumption success. A row
+limit or decoder failure after confirmed execution leaves server status `SUCCESS`.
+`BLOCKED` and unknown statuses remain pending until a terminal status or deadline.
+After disposal without a known terminal state, status is unavailable rather than
+queried through a destroyed connection. Cancelling a handle prevents pending local
+result retrieval from continuing, but cannot prove the server query was cancelled.
+
+Abort/deadline errors do not prove server cancellation or transaction rollback.
+Submitted statements are never automatically replayed. Errors retain query IDs
+and known/unknown completion; a `query()` or `stream()` deadline that expires before Snowflake
+responds has no query ID yet, though the SDK still cancels the statement. `close()` stops new work, waits, then requests
+cleanup; if the grace period expires it reports `SHUTDOWN_TIMEOUT`. Existing handles
+may complete during that grace period. Bounded best-effort cleanup follows the grace
+period and can add up to roughly 15 seconds for cancellation/status/destruction;
+`timeoutMs` is not an overall wall-clock bound. No signal
+handlers are installed. A user callback or driver authentication that never
+settles may outlive a client deadline; the SDK cleans up late completion and
+does not pretend the underlying operation was cancelled.
+
+When Snowflake reports a query as failed, `details.errorCode` holds Snowflake's numeric error
+code, such as `002003` for a missing or unauthorized object. Login and submission failures carry
+the driver's code, and `sqlState` when present, the same way. Snowflake's message can quote SQL
+literals, so it appears only in the error's `cause`: `console.error(error)` prints it, while the
+error's `message` and `toJSON()` leave it out.
+
+### Detached queries across requests and instances
+
+Use this explicit path when an HTTP response or process can end before the query.
+The submission request saves the reference and returns the query ID without
+checking completion:
+
+```ts
+const reference = await client.submitDetached("SELECT CURRENT_USER() AS USER_NAME", {
+  executionTimeoutMs: 60_000,
+});
+// Persist reference in trusted shared storage with the app's authorization record.
+return Response.json({ status: "pending", queryId: reference.queryId }, { status: 202 });
+```
+
+The browser schedules later requests to the application's backend, passing the
+query ID, not the full reference. Each authenticated request loads and authorizes
+the shared record before calling:
+
+```ts
+const outcome = await client.pollQuery(authorizedRecord.reference, { signal: request.signal });
+if (outcome.status === "complete") console.log(outcome.result.rows);
+return Response.json(outcome, { status: outcome.status === "pending" ? 202 : 200 });
+```
+
+`pollQuery()` checks status once; it never sleeps or retries pending execution.
+Pending returns HTTP 202 through the handler, and the browser schedules another
+request. Success reads the completed result and returns HTTP 200. The initial
+submission's `pending` means accepted, not an observed running status. Any backend
+instance can handle a later request; no server polling loop, retained handle, or
+original Serverless instance must survive scale-down.
+
+For an export larger than the saved `maxRows` and `maxBytes`, such as a CSV download, call
+`streamQuery()` instead. It checks status once like `pollQuery()` and returns the same pending
+outcome. Success returns `{ status: "complete", queryId, stream }`: a single-consumer
+`RowStream` in the saved format and row mode that reads every row, without those limits.
+
+```ts
+const outcome = await client.streamQuery(authorizedRecord.reference, { signal: request.signal });
+if (outcome.status === "pending") return Response.json(outcome, { status: 202 });
+for await (const row of outcome.stream) writeCsvRow(row); // The app's encoder and response body.
+```
+
+The stream holds its lookup connection, which counts toward `maxConnections`, until iteration
+ends or breaks, `stream.close()` is called, the signal aborts, `consumeTimeoutMs` expires, or
+client shutdown's grace period ends. None of these cancels the query. A failure partway throws
+from iteration, so end the response with an error rather than as a complete file.
+`examples/detached-http.ts` streams JSON lines and closes the stream when the client disconnects.
+
+```ts
+const status = await client.getQueryStatus(authorizedRecord.reference);
+// Only when the user/application explicitly requests cancellation:
+await client.cancelQuery(authorizedRecord.reference);
+```
+
+These five methods also exist on caller views and standalone query clients. Existing
+`query()` and `handle.result()` behavior is unchanged: their wait timeouts still throw
+and request cleanup, not pending.
+
+`QueryReference` is serializable metadata: `version: 1`, `queryId`, ISO `submittedAt`,
+`identity: { organization, account, user, role }`, `mode: "owner" | "caller"`, and
+`results: { format, rowMode, maxRows, maxBytes, numbers? }`. `numbers` is saved only when it's
+`"number"`, and a missing value means `"string"`, so references with default settings stay
+readable by earlier versions. Organization and account are
+server-reported names. The reference contains no credentials, SQL, or binds. It is
+not signed and is not permission to read results. Do not pass browser-supplied
+references directly to these methods.
+
+Persist it with the application ID, authenticated application subject, authorization
+mode, decoder policy, and expiry before returning the query ID. Authenticate and
+authorize that shared record on every poll/stream/cancel. `examples/detached-http.ts` shows
+the flow with an injected store, admission check, and versioned synchronous decoder.
+It intentionally does not implement shared storage as an in-process Map.
+
+Every poll/stream/status/cancel gets fresh credentials, opens a new connection, and
+compares its server-reported organization/account, user, role, and owner/caller scope
+with the reference. A mismatch raises `QUERY_IDENTITY_MISMATCH`; no role switching
+or caller-to-owner fallback occurs. Detached caller methods require present caller
+context even locally, unless `callerAsOwner: true` makes caller views owner scopes, which use
+owner credentials and save owner references. Use a new caller view with trusted headers for each
+request.
+
+`DetachedQueryOptions` supports binds, warehouse, result settings, signal,
+`acquireTimeoutMs`, `authTimeoutMs`, `submitTimeoutMs` (30 seconds by default), and
+`executionTimeoutMs` (600 seconds by default). Submission setup/acknowledgement is
+separate from server execution. The latter accepts integer milliseconds from 1,000
+through 604,800,000 and rounds down to seconds; a lower effective statement limit
+is retained, and warehouse/server policies may shorten it further. Submission
+requires `ABORT_DETACHED_QUERY = FALSE` and `AUTOCOMMIT = TRUE`, otherwise
+`DETACHED_QUERY_NOT_SUPPORTED`. The SDK does not override those policies.
+
+`PollQueryOptions`, for `pollQuery()` and `streamQuery()`, supports `signal`,
+acquisition/authentication timeouts, `lookupTimeoutMs` (30 seconds after login for identity,
+status, and any result setup/initial fetch), `consumeTimeoutMs` (client default, otherwise
+120 seconds; for a stream, counted from when `streamQuery()` returns), and synchronous
+`decodeRow`. Status/cancel accept `QueryLookupOptions`: signal, acquisition/authentication,
+and lookup timeouts. Saved result settings cannot be overridden during retrieval. Detached
+`waitMs` and `pollIntervalMs` are rejected; there is no zero-I/O poll or server-side
+availability wait.
+
+Only an observed nonterminal status returns `{ status: "pending", queryId }`.
+Success returns `{ status: "complete", queryId, result }` from `pollQuery()` and
+`{ status: "complete", queryId, stream }` from `streamQuery()`. Pending checks skip
+result-format setup and result fetching. Completed results still take time to
+download, so configure request and consumption limits accordingly. Acquisition,
+login, lookup, consumption, and cleanup are separate, not one total HTTP timeout.
+Each retrieval reads from the beginning; the SDK does not persist partial results.
+A partial result is never returned as complete.
+
+Driver errors, lookup/consumption timeouts, conversion/limit failures, and terminal
+query failures throw instead of returning pending. They do not cancel detached work.
+`NO_QUERY_DATA` becomes `QUERY_UNAVAILABLE`, which can mean expired, inaccessible,
+or unknown; the SDK cannot reliably distinguish these cases. A result-fetch failure
+can still have `completion: "succeeded"`.
+
+`cancelQuery()` checks status first and issues the public cancellation function with a
+bound query ID only for an unfinished query. It resolves to `{ queryId, cancelled: true }`
+when Snowflake confirms the cancellation, or when a status check afterward shows the query
+cancelled: `FAILED_WITH_ERROR` with error `000604`, which is how Snowflake reports a
+cancelled query, or `ABORTED`. Otherwise it resolves to `{ queryId, cancelled: false, status }`
+with the terminal status observed: the query had already finished, including after an earlier
+cancellation, or it finished before the cancellation took effect, for example with `SUCCESS`
+or a statement timeout (`FAILED_WITH_ERROR` with error `000630`). Record a job as cancelled
+only when `cancelled` is true. If the query still appears to be running after an unconfirmed
+request, it throws `QUERY_FAILED`, with Snowflake's `errorCode` when Snowflake refused the request;
+cancelling a caller's query needs a caller grant described in [Caller Context](#caller-context).
+It does not guarantee rollback or that an in-progress cancellation has completed.
+
+```ts
+const { cancelled } = await client.cancelQuery(authorizedRecord.reference);
+```
+
+Detached connections never enter the reusable pool. They set
+`serverSessionKeepAlive: true` and no client heartbeat. After submission acknowledgement,
+request abort and `close()` release local resources without cancelling server work.
+Before acknowledgement, cancellation is best effort and the outcome can be unknown.
+Lookup/cancel connections also avoid deleting server sessions. Ordinary connections
+and native-options factory defaults keep their previous cleanup behavior.
+
+The SDK destroys local readers/connections and observes late callbacks, but the
+pinned driver can retain in-flight chunk downloads after stream destruction. Cleanup
+is not proof that all driver background activity stopped. Retained Snowflake sessions
+follow server policies, and running queries continue consuming credits. Local connection
+limits do not cap distributed detached jobs or retained server sessions; the application
+owns those quotas. This is one self-contained statement, not a transaction/session
+continuation or support for file transfers/independently spawned background work.
+
+Application expiry is independent of Snowflake result retention. Store results elsewhere
+for longer retention. There is an unavoidable crash window between acknowledgement and
+durable record storage; this SDK does not provide exactly-once registration or SQL replay.
+After registration, the server need not stay active between browser requests. Closing
+the browser stops polling, not the Snowflake query; cancellation must be explicit.
+Live SPCS/Serverless owner/caller, replica/restart, multi-user, cancellation, policy, and expiry
+qualification remains required. Offline tests do not establish those platform guarantees.
+
+## Secrets and REST
+
+```ts
+const apiKey = await client.secrets.getString("API_KEY");
+const login = await client.secrets.getPassword("SERVICE_LOGIN");
+const token = await client.secrets.getAccessToken("PARTNER_API");
+const response = await client.fetch("/api/v2/warehouses");
+if (!response.ok) {
+  await response.body?.cancel();
+  throw new Error(`Account API returned HTTP ${response.status}`);
+}
+const warehouses = await response.json();
+```
+
+Secret-only use does not load or authenticate the SQL driver. Mounts under
+`/secrets/<name>/` take precedence over `SNOWFLAKE_SECRET_<NAME>_*` environment
+values. String/password contents are preserved. Empty mounts fail closed because
+they may indicate revocation; they never fall back to stale environment values.
+Username/password must come from one source. Platform updates are atomic per
+file, not necessarily as a pair, so this cannot guarantee a consistent pair
+during concurrent platform rotation.
+
+Local OAuth uses the client-credentials grant, not refresh tokens. Configure
+`OAUTH_TOKEN_URL`, `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, and optional
+`OAUTH_SCOPE` under the same prefix. Concurrent acquisition is coalesced;
+responses without `expires_in` are not cached. `ACCESS_TOKEN` supports static
+local tokens. Mounted tokens are reopened on every read.
+OAuth endpoint, client credentials, scope, and static-token changes invalidate prior
+cache/inflight ownership. Expiry is measured conservatively from acquisition start.
+A revoked/removed mounted source does not restore an environment fallback after the
+mount has been observed. Shutdown clears the SDK's token cache.
+
+`client.fetch()` currently supports OAuth/PAT source credentials only and returns a standard
+Response-compatible object. Supply an account-relative path, not an absolute
+URL. Authentication headers and redirects are restricted. Password/SSO/key-pair
+SQL connectivity does not imply REST support. HTTP uses an explicit environment
+proxy agent and Node's TLS trust, including startup `NODE_EXTRA_CA_CERTS`.
+Do not disable certificate verification.
+
+Each request has a deadline of 120 seconds by default. Set `timeouts.httpMs` on the fetch client,
+`createFetchClient(connectionOptions, { timeouts: { httpMs } })`, to change
+the default, or pass `timeoutMs` with a request to override it for that request; both take whole
+milliseconds. The deadline is combined with—not replaced by—the caller signal, and it remains active
+while reading the response body, so raise it for long streaming responses such as server-sent
+events:
+
+```ts
+const response = await client.fetch(path, { method: "POST", body, timeoutMs: 15 * 60_000 });
+```
+
+If the deadline expires before the response arrives, `fetch()` rejects with `TIMEOUT`; after that,
+reading the body fails with a `TimeoutError`. Network, DNS, and TLS failures reject with
+`HTTP_FAILED`, keeping the underlying error as the non-serialized `cause`. Invalid proxy settings
+fail without a cause, because proxy URLs can contain credentials. Consume or cancel every body; HTTP
+status codes are not automatically thrown or retried. Shutdown aborts outstanding HTTP
+requests/bodies immediately while SQL operations receive their grace period.
+
+Use `client.asCaller({ headers }).fetch(path, init)` for caller-scoped requests.
+This pre-release API replaces `client.rest.fetch()` with `client.fetch()`; no `rest`
+namespace or compatibility alias is retained. Response handling, deadlines, account
+restriction, and caller identity rules are unchanged.
+
+## Diagnostics and Driver Injection
+
+`await client.diagnostics()` reports the session mode and resource counts: active, queued, idle,
+and physical connections. It does not acquire credentials or open a connection.
+
+Pass a `logger` to `createConnectionManager()` to receive an event for each SQL login and
+query. For example, to print a line for each:
+
+```ts
+const connections = createConnectionManager(options, {
+  logger: (event) => console.log("[snowflake]", JSON.stringify(event)),
+});
+```
+
+- `session-opened`: a new SQL session logged in, with `mode` (`"owner"` or `"caller"`) and
+  `durationMs` from reading credentials through login. Reusing a session logs nothing.
+- `query-succeeded`: a statement finished, with `queryId`, `durationMs`, and `rowCount`, the number
+  of rows returned. `stream()` and `streamQuery()` log it when they return the stream, without
+  `rowCount`.
+- `query-failed`: the operation failed, with `code`, the SDK error code; `errorCode`, Snowflake's
+  numeric error code, when it reported one; `queryId` when known; and `durationMs`.
+
+Query events come from `query()`, `stream()`, `tx.query()`, `pollQuery()`, `streamQuery()`, and
+`submit()` handles, whose `result()` logs success. `durationMs` is whole milliseconds since the
+call, or since `submit()` for a handle, including acquiring a session. Detached submission, status
+checks, cancellation, and pending polls log nothing, and neither do the sessions detached
+operations open. Events never contain SQL text, binds, rows, credentials, profile values, file
+paths, or driver or Snowflake error messages. A logger that throws or rejects doesn't affect the operation. A custom
+options provider has no logger, so the components that use it log nothing.
+
+Underlying error causes may contain sensitive driver content; do not return them to clients or
+serialize them automatically. The SDK adds no telemetry; the Node driver's own logging and
+telemetry behavior remain separate. The driver logs several lines at its default `INFO`
+level for each new connection, and operations use a new connection by default. To change
+its level, configure the module you inject:
+
+```ts
+import snowflake from "snowflake-sdk";
+snowflake.configure({ logLevel: "ERROR" });
+const connections = createConnectionManager(options, { driver: snowflake });
+```
+
+The injected module is authoritative; it must implement `createPool`, which every session comes
+from. The default driver is loaded only when needed, never configured globally by the SDK. The tested baseline is 3.4.0;
+other versions are not yet claimed compatible. Root types are SDK-owned except
+the explicit bind/driver integration boundaries. Advanced raw connection types
+are also exported from `@snowflake/sar-sdk/driver`.
+
+## Validation Status
+
+The repository checks synthetic driver behavior, real pinned-driver conversion
+contracts, cancellation races, auth/secret boundaries, source/public types, and
+installed ESM/CommonJS consumers. The [examples](https://github.com/snowflakedb/sar-sdk/tree/main/nodejs/examples) compile
+against public exports. None of those checks executes SQL or acquires real credentials.
+
+The options-based components have not been live-qualified. Serverless/preview,
+fresh-session SSO/MFA, broader RBAC/proxy/CA coverage, real OAuth/secret rotation,
+load, and deployment packaging still need qualification. Other driver major versions
+and Node 20 are not supported. See the [release checklist](https://github.com/snowflakedb/sar-sdk/blob/main/nodejs/CONTRIBUTING.md#release-checklist).
+
+Inheriting another tool's active connection or session/master tokens requires a
+supported platform contract. Inherited sessions are deliberately rejected rather
+than silently shared, mutated, refreshed, or logged out. Shared configuration
+does not guarantee the connection currently selected in another tool. PUT/GET/file-transfer and
+other multi-statement session workflows should use the advanced driver callback; the normal
+query/stream/submit API is for single row-producing statements, and `transaction()` runs them in
+one transaction.
+
+## API at a glance
+
+| API                                                            | Contract                                                   |
+| -------------------------------------------------------------- | ---------------------------------------------------------- |
+| `createSarClient(connectionOptions?)`                          | Every component from one provider; `fromDefault()` if none |
+| `createSarClient({ queryClient, fetchClient, secretsClient })` | Synchronous composition of the components                  |
+| `client.connect()`                                             | Temporary owned-session readiness check                    |
+| `client.query<Row>(sql, options?)`                             | Materialized rows, query ID, columns, returned-row count   |
+| `client.submit<Row>(sql, options?)`                            | Process-local handle; `status()`, `result()`, `cancel()`   |
+| `client.stream<Row>(sql, options?)`                            | Single-consumer async iterable; explicit `close()`         |
+| `client.transaction(callback, options?)`                       | One session; serialized `tx.query()`; COMMIT or ROLLBACK   |
+| `client.asCaller({ headers })` or `({ token })`                | Immutable request-scoped subset                            |
+| `client.withConnection(callback)`                              | Awaited raw-driver callback and automatic disposal         |
+| `client.asCaller({ headers }).withConnection(callback)`        | Raw-driver callback with the caller's identity             |
+| `client.secrets.getString/getPassword/getAccessToken(name)`    | Async mount/environment/provider resolution                |
+| `client.fetch(path, init?)`                                    | Account-relative authenticated HTTP; caller owns body      |
+| `client.diagnostics()`                                         | Async session mode and resource counts, not a health probe |
+| `client.close({ timeoutMs }?)`                                 | Idempotent stop-admission, SQL grace period, cleanup       |
+
+Root exports include SDK types and `SarError`/`isSarError`. `/auth` exports
+`createConnectionOptions`, `fromDefault`, `fromToml`, `fromPlatform`, and `getCallerUserToken`; `/driver` exposes Node-driver integration types.
+No internal file path is a supported import. Source JSDoc and declarations are the
+API reference; internal files and test fixtures may change without compatibility guarantees.
+
+## License
+
+Copyright (c) Snowflake Inc. All rights reserved.
+
+Licensed under the Apache 2.0 license.

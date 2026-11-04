@@ -1,0 +1,64 @@
+# Copyright 2026 Snowflake Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Release tooling downloads the npm-package artifact from this workflow's run
+# for the release commit. Keep this file name, the artifact name, and the
+# tarball name stable.
+name: Build Node.js package
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/build-nodejs-package.yml
+permissions:
+  contents: read
+defaults:
+  run:
+    working-directory: nodejs
+jobs:
+  package:
+    name: Build npm package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: nodejs/package-lock.json
+      - run: npm install --global npm@11.18.0 --ignore-scripts
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build and check the package
+        run: npm run test:package
+      # Packs the build that the package check just tested, without rebuilding.
+      - name: Pack
+        id: pack
+        run: |
+          out="$RUNNER_TEMP/npm-package"
+          mkdir -p "$out"
+          file=$(npm pack --ignore-scripts --json --pack-destination "$out" | jq -r '.[0].filename')
+          (cd "$out" && sha256sum "$file" > "$file.sha256")
+          echo "dir=$out" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-package
+          path: ${{ steps.pack.outputs.dir }}
+          if-no-files-found: error
+          retention-days: 90

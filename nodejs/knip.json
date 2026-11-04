@@ -1,0 +1,26 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/index.ts",
+    "src/connection-options/index.ts",
+    "src/connection-manager/index.ts",
+    "src/query-client/index.ts",
+    "src/fetch-client/index.ts",
+    "src/secrets-client/index.ts",
+    "src/driver.ts",
+    "src/browser.ts",
+    "tests/**/*.test.ts",
+    "tests/types/usage.{mts,cts}",
+    "integration/**/*.test.ts",
+    "examples/*.ts",
+    "scripts/*.mjs"
+  ],
+  "project": [
+    "src/**/*.ts",
+    "tests/**/*.{ts,mts,cts}",
+    "integration/**/*.ts",
+    "examples/*.ts",
+    "scripts/*.mjs"
+  ],
+  "ignoreDependencies": ["publint"]
+}
