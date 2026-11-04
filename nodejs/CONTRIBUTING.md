@@ -136,7 +136,8 @@ npm run test:integration
 `.env*` is ignored by Git if you prefer a file. Never commit credentials or a key, and never print
 one: add no test output, log, or assertion message that could contain a credential.
 
-The first test only reads, and creates no Snowflake object. Keep it that way where you can. A test
+The tests only read, create no Snowflake object, and need no warehouse, since the test user may not
+have one. Keep it that way where you can. A test
 that must create something should make its name unique per run and drop it even when the test
 fails, because these tests share one account.
 
