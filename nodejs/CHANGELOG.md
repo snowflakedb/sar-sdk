@@ -19,6 +19,14 @@ limitations under the License.
 
 ## Unreleased
 
+- **Breaking:** `fromToml()`, and `fromDefault()` when it reads a profile, turn on the driver's
+  token cache for profiles that log in with `EXTERNALBROWSER` or `OAUTH_AUTHORIZATION_CODE`
+  (`clientStoreTemporaryCredential`), and its MFA token cache for `USERNAME_PASSWORD_MFA`
+  (`clientRequestMFAToken`). Each owner operation opens a fresh session, so without the cache
+  every query logged in again, opening a browser each time for SSO. Set
+  `client_store_temporary_credential` or `client_request_mfa_token` to `false` in the profile to
+  keep the old behavior.
+
 ## 0.1.0
 
 First release. Before 1.0, a breaking change bumps the minor version, so `^0.1.0` never

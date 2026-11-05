@@ -46,7 +46,17 @@ function withTokenFile(options: snowflake.ConnectionOptions, filename: string) {
 
 const contextKeys = ["account", "username", "warehouse", "database", "schema", "role"];
 
-/** Read one SnowCLI connection from its TOML configuration, without environment overlays. */
+/** The driver option that caches each interactive login's token between sessions. */
+const loginCaches: Record<string, "clientStoreTemporaryCredential" | "clientRequestMFAToken"> = {
+  EXTERNALBROWSER: "clientStoreTemporaryCredential",
+  OAUTH_AUTHORIZATION_CODE: "clientStoreTemporaryCredential",
+  USERNAME_PASSWORD_MFA: "clientRequestMFAToken",
+};
+
+/**
+ * Read one SnowCLI connection from its TOML configuration, without environment overlays. For
+ * an interactive login it turns on the driver's token cache unless the profile sets the key.
+ */
 export function fromToml(
   input: {
     name?: string;
@@ -65,6 +75,13 @@ export function fromToml(
     fail("CONFIG_INVALID", "Token credentials require an explicit OAuth or PAT authenticator");
   if (options.token && tokenFilePath)
     fail("CONFIG_INVALID", "Choose token or tokenFilePath, not both");
+  // Each owner operation opens a fresh session, so without the cache every query logs in
+  // again. The driver fails the login when a named cache directory is missing, so such a
+  // profile keeps the driver's default.
+  const cache = loginCaches[String(options.authenticator ?? "").toUpperCase()];
+  const cacheDirectory = options.credentialCacheDir;
+  if (cache && options[cache] === undefined && (!cacheDirectory || exists(String(cacheDirectory))))
+    options[cache] = true;
   const result = options as snowflake.ConnectionOptions;
   return tokenFilePath ? withTokenFile(result, String(tokenFilePath)) : result;
 }

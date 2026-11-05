@@ -389,8 +389,19 @@ after changing them.
 Supported credentials are whatever the driver supports: OAuth, PAT, password, key pairs, and
 driver-managed login flows. Driver-managed interactive logins, such as `EXTERNALBROWSER`, open a
 browser, so use them only where one can open. The SDK serializes those logins; native consumers
-manage login concurrency themselves. The SDK does not cache SQL login tokens; its separate
-client-credentials secret cache is described below. Configuration failures carry a
+manage login concurrency themselves.
+
+The SDK keeps no SQL login tokens itself. Each owner operation opens a fresh session, though, so
+for a profile that logs in with `EXTERNALBROWSER` or `OAUTH_AUTHORIZATION_CODE`, `fromToml()` turns
+on the driver's token cache (`clientStoreTemporaryCredential`), and for `USERNAME_PASSWORD_MFA` its
+MFA token cache (`clientRequestMFAToken`). Otherwise every query would log in again. The account
+must allow cached tokens (`ALLOW_ID_TOKEN` for browser SSO, `ALLOW_CLIENT_MFA_CACHING` for MFA). A
+profile that sets `client_store_temporary_credential` or `client_request_mfa_token` keeps its own
+value, and one whose `credential_cache_dir` doesn't exist keeps the driver's default, since the
+driver fails the login rather than skip a missing directory. The client-credentials secret cache
+is described below.
+
+Configuration failures carry a
 `details.nextStep` hint, which `toJSON()` includes; hints never contain file paths or credentials.
 
 ## Queries and Ownership

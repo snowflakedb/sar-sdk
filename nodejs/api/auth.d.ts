@@ -7,7 +7,10 @@ interface HeaderReader {
 /** Extracts caller context; it does not validate the token or authenticate ingress. */
 declare function getCallerUserToken(headers: HeaderReader): string | null;
 
-/** Read one SnowCLI connection from its TOML configuration, without environment overlays. */
+/**
+ * Read one SnowCLI connection from its TOML configuration, without environment overlays. For
+ * an interactive login it turns on the driver's token cache unless the profile sets the key.
+ */
 declare function fromToml(input?: {
     name?: string;
     configFile?: string;

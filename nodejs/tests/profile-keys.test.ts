@@ -16,10 +16,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createConnectionOptions, fromToml } from "../src/connection-options/index.js";
+import { createConnectionOptions, fromDefault, fromToml } from "../src/connection-options/index.js";
 import { profileFields } from "../src/connection-options/config.js";
 import { createTestClient } from "./test-client.js";
 
@@ -240,5 +240,77 @@ describe("profile keys the SDK doesn't use", () => {
           message: expect.stringMatching(/^Unknown .* option: connection$/),
         }),
       );
+  });
+});
+
+describe("token caches for interactive logins", () => {
+  const login = ['account = "dev-account"', 'user = "developer"'];
+  const read = () => fromToml({ name: "dev" }) as Record<string, unknown>;
+
+  it.each([
+    ["externalbrowser", "clientStoreTemporaryCredential"],
+    ["EXTERNALBROWSER", "clientStoreTemporaryCredential"],
+    ["oauth_authorization_code", "clientStoreTemporaryCredential"],
+    ["username_password_mfa", "clientRequestMFAToken"],
+  ])("turns on the driver's cache for %s", async (authenticator, option) => {
+    await profile(...login, `authenticator = "${authenticator}"`);
+    const options = read();
+    expect(options[option]).toBe(true);
+    const other =
+      option === "clientRequestMFAToken"
+        ? "clientStoreTemporaryCredential"
+        : "clientRequestMFAToken";
+    expect(options).not.toHaveProperty(other);
+  });
+
+  it.each([
+    ["no authenticator", []],
+    ["a key pair", ['authenticator = "snowflake_jwt"']],
+    ["an OAuth token", ['authenticator = "oauth"', 'token = "synthetic.token"']],
+  ])("leaves %s alone", async (_, lines) => {
+    await profile(...login, ...lines);
+    const options = read();
+    expect(options).not.toHaveProperty("clientStoreTemporaryCredential");
+    expect(options).not.toHaveProperty("clientRequestMFAToken");
+  });
+
+  it.each([
+    ["externalbrowser", "client_store_temporary_credential", "clientStoreTemporaryCredential"],
+    ["username_password_mfa", "client_request_mfa_token", "clientRequestMFAToken"],
+  ])("keeps a %s profile's own %s", async (authenticator, key, option) => {
+    await profile(...login, `authenticator = "${authenticator}"`, `${key} = false`);
+    expect(read()[option]).toBe(false);
+  });
+
+  it("keeps the driver's default when the profile's cache directory is missing", async () => {
+    await profile(
+      ...login,
+      'authenticator = "externalbrowser"',
+      'credential_cache_dir = "missing"',
+    );
+    expect(read()).not.toHaveProperty("clientStoreTemporaryCredential");
+  });
+
+  it("turns the cache on with the profile's cache directory when it exists", async () => {
+    await mkdir(path.join(directory, "cache"));
+    await profile(...login, 'authenticator = "externalbrowser"', 'credential_cache_dir = "cache"');
+    expect(read()).toMatchObject({
+      clientStoreTemporaryCredential: true,
+      credentialCacheDir: path.join(directory, "cache"),
+    });
+  });
+
+  it("applies when fromDefault() reads the default profile", async () => {
+    await writeFile(
+      path.join(directory, "connections.toml"),
+      [
+        'default_connection_name = "dev"',
+        "[dev]",
+        ...login,
+        'authenticator = "externalbrowser"',
+      ].join("\n"),
+      { mode: 0o600 },
+    );
+    expect(fromDefault()).toMatchObject({ clientStoreTemporaryCredential: true });
   });
 });
