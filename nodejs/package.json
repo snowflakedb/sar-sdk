@@ -131,7 +131,7 @@
   },
   "dependencies": {
     "smol-toml": "1.9.1",
-    "snowflake-sdk": "3.4.0",
+    "snowflake-sdk": "3.4.1",
     "undici": "6.29.1"
   },
   "devDependencies": {
