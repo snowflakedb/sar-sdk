@@ -48,6 +48,11 @@ repository root. It needs Docker and checks `HEAD`.
   [nodejs/CHANGELOG.md](nodejs/CHANGELOG.md), and a breaking one starts with **Breaking:**.
 - A change to the export map, public types, defaults, error codes, or fallback rules is called out
   for compatibility review in the pull request.
+- A dependency update, including a Dependabot pull request you review or merge, follows the
+  checklist in
+  [Distribution and dependency maintenance](nodejs/CONTRIBUTING.md#distribution-and-dependency-maintenance):
+  every mention of the old version, a changelog entry for a runtime dependency, and driver
+  qualification for `snowflake-sdk`.
 
 ## Git and pull requests
 

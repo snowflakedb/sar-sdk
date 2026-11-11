@@ -42,7 +42,7 @@ Before 1.0, a breaking change bumps the minor version, so `^0.1.0` never install
 The tested TypeScript baseline is 5.9. Use `module`/`moduleResolution: "NodeNext"` (Node.js)
 or `moduleResolution: "Bundler"` (a server bundler), and Node.js type declarations.
 Both ESM and CommonJS declarations are included. Node >=22 is required.
-JavaScript consumers need no TypeScript compiler. The tested driver is exactly 3.4.0.
+JavaScript consumers need no TypeScript compiler. The tested driver is exactly 3.4.1.
 
 ```ts
 import { createSarClient } from "@snowflake/sar-sdk";
@@ -826,7 +826,7 @@ const connections = createConnectionManager(options, { driver: snowflake });
 ```
 
 The injected module is authoritative; it must implement `createPool`, which every session comes
-from. The default driver is loaded only when needed, never configured globally by the SDK. The tested baseline is 3.4.0;
+from. The default driver is loaded only when needed, never configured globally by the SDK. The tested baseline is 3.4.1;
 other versions are not yet claimed compatible. Root types are SDK-owned except
 the explicit bind/driver integration boundaries. Advanced raw connection types
 are also exported from `@snowflake/sar-sdk/driver`.

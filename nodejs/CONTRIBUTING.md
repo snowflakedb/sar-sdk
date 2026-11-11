@@ -188,8 +188,17 @@ seven days, and Dependabot waits the same seven days. Because pre- and post-scri
 `npm pack` doesn't build first: run `npm run build` before packing by hand.
 
 Review dependency-update PRs; do not merge lockfile changes solely because install passes.
-Driver upgrades require the characterization suite and a new live qualification matrix.
-Do not use `npm audit fix --force`. Review public advisories and license changes before release.
+A dependency update, including one Dependabot opens, also needs:
+
+- Every mention of the old version updated: the README, tests, examples, and comments.
+  `tests/driver-version.test.ts` fails when the README's tested driver differs from the
+  `snowflake-sdk` pin.
+- An entry under Unreleased in the changelog when a runtime dependency (`dependencies` in
+  `package.json`) changes, because it ships with the package. Development dependencies need none.
+- For `snowflake-sdk`, the driver's changes since the pinned version, read and summarized in that
+  entry where they affect the SDK, plus the characterization suite and a new live qualification
+  matrix.
+  Do not use `npm audit fix --force`. Review public advisories and license changes before release.
 
 Coverage is a regression signal, not certification. CI enforces the measured floor in
 `vitest.config.ts`; do not lower it to accommodate untested code without explanation.

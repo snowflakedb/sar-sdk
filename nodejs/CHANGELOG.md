@@ -26,6 +26,9 @@ limitations under the License.
   every query logged in again, opening a browser each time for SSO. Set
   `client_store_temporary_credential` or `client_request_mfa_token` to `false` in the profile to
   keep the old behavior.
+- The SDK now depends on `snowflake-sdk` 3.4.1 instead of 3.4.0. That release changes how the
+  driver handles a failed session token renewal: requests queued during the renewal fail instead
+  of being sent, and reading a result on the disconnected connection reports the original error.
 
 ## 0.1.0
 

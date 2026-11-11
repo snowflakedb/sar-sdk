@@ -39,7 +39,7 @@ export type FakeDriverModule = DriverModule & {
   createConnection(options: snowflake.ConnectionOptions): snowflake.Connection;
 };
 
-/** snowflake-sdk 3.4.0's createPool, building connections with the driver's createConnection. */
+/** snowflake-sdk 3.4.1's createPool, building connections with the driver's createConnection. */
 export function driverPool(driver: Pick<FakeDriverModule, "createConnection">): CreatePool {
   return (options, poolOptions) => {
     const pool = genericPool.createPool(
