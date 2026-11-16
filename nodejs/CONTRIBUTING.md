@@ -142,8 +142,10 @@ that must create something should make its name unique per run and drop it even 
 fails, because these tests share one account.
 
 CI runs them in the development repository for every pull request and every push to `main`, in
-`.github/workflows/integration-nodejs.yml`, from repository secrets of the same names. The job
-cannot run in the public mirror, which a different organization owns.
+`.github/workflows/integration-nodejs.yml`, from repository secrets of the same names. GitHub
+Actions secrets are not available to workflows Dependabot starts, so the development repository
+also stores those names as Dependabot secrets. The job cannot run in the public mirror, which a
+different organization owns.
 
 ## API and extension rules
 

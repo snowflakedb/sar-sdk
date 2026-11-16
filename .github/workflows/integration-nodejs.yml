@@ -50,6 +50,8 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       # The test names any variable it is missing, so an unconfigured secret fails with a message
       # rather than being skipped. Secret values are never printed.
+      # Dependabot pull requests cannot read Actions secrets. Store the same SNOWFLAKE_TEST_*
+      # names as Dependabot secrets in the development repository so this job can run there too.
       - run: npm run test:integration
         env:
           SNOWFLAKE_TEST_ACCOUNT: ${{ secrets.SNOWFLAKE_TEST_ACCOUNT }}

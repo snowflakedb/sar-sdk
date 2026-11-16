@@ -60,6 +60,10 @@ repository root. It needs Docker and checks `HEAD`.
 - Pull requests are squash-merged, and their commit messages and title become the published
   commit. Write them for a public reader.
 - In the pull request description, state the intent and how you verified the change.
+- When asked, approve and squash-merge a pull request there, including a Dependabot pull
+  request. Review it against the checklist above before approving. In a review comment, say you
+  are an agent. GitHub rejects an approval from the account that opened the pull request, so one
+  you opened still needs a different reviewer.
 
 ## Ask before
 
@@ -74,7 +78,7 @@ repository root. It needs Docker and checks `HEAD`.
   mirror that only the mirror automation writes to.
 - Retry a failed push or pull request against another remote or repository. Stop and report the
   error.
-- Approve a pull request, or reply to a review on someone's behalf without saying you're an agent.
+- Reply to a review on someone's behalf without saying you're an agent.
 - Commit secrets or credentials.
 - Put internal links, ticket numbers, or hostnames in commit messages, pull request titles, or
   published files.
