@@ -24,6 +24,9 @@ caller identity, owned SQL sessions, bounded results, secrets, and account HTTP.
 | -------- | ----------------------------- | -------------------- | ----------------------- |
 | Node.js  | [`nodejs/`](nodejs/README.md) | `@snowflake/sar-sdk` | Pre-1.0 releases on npm |
 
+[`templates/`](templates/README.md) holds starter projects for new apps, which Snowflake CLI's
+`snow app init` creates projects from.
+
 - [Contributing](CONTRIBUTING.md)
 - [Security](SECURITY.md)
 
@@ -39,6 +42,8 @@ suggest a change, open an issue. Report security vulnerabilities as described in
 
 ```text
 nodejs/     Node.js SDK: package, tests, examples, and npm toolchain
+templates/  App templates and their generated catalog
+scripts/    Repository tooling: the template catalog generator and the mirror
 .github/    CI workflows and pull request template
 ```
 

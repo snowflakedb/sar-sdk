@@ -1,0 +1,11 @@
+{
+  "title": "Next.js",
+  "summary": "A Next.js app in TypeScript and React, with Tailwind CSS, shadcn/ui components, and Recharts. Ships a welcome page to replace.",
+  "when_to_use": "The default: rich interactive UIs, charts, client-side state, or when no language or framework is named.",
+  "when_not_to_use": "The app must use Streamlit, or Python.",
+  "runtime": "node",
+  "framework": "nextjs",
+  "requires": [],
+  "surfaces": ["cli", "workspaces"],
+  "default": true
+}

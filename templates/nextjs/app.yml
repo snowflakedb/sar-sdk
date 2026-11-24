@@ -1,0 +1,55 @@
+# created-by: sar-sdk-templates; template=nextjs
+version: 2
+
+runtime: node
+
+# Where the app deploys. `snow app init` and Snowsight Workspaces fill these in
+# from your account's defaults when they create the project. `name` is upper case.
+name: <%APP_NAME%>
+database: <%DATABASE%>
+schema: <%SCHEMA%>
+query_warehouse: <%QUERY_WAREHOUSE%>
+
+# Display metadata. Replace all three for the app you build.
+label: '<%LABEL%>'
+description: A Next.js app running on Snowflake App Runtime.
+icon: public/icon.svg
+
+install:
+  commands:
+    - ["npm", "ci", "--include=dev"]
+
+build:
+  commands:
+    - ["npm", "run", "build"]
+    # For standalone mode
+    - ["cp", "-r", ".next/static", ".next/standalone/.next/static"]
+    - ["cp", "-r", "public", ".next/standalone/public"]
+    # Avoid packaging extra node_modules since standalone includes its own
+    - ["rm", "-rf", "node_modules"]
+
+run:
+  command: ["node", ".next/standalone/server.js"]
+
+# Not uploaded. Each entry is a file or directory name, matched at any depth.
+ignore:
+  - node_modules
+  - .next
+  - .git
+  - .env*
+  - snowflake.log
+
+# Secrets read via snowflake.secrets (lib/snowflake.ts) must be declared here so
+# the SPCS runtime mounts them under /secrets/<name>/. Map a logical `name` to an
+# existing Snowflake SECRET object. `secrets:` (and `environment_variables:`) are
+# TOP-LEVEL keys — siblings of install/run at column 0. Do NOT nest them under
+# `run:`. Uncomment when the app uses secrets. See README → Secrets.
+# secrets:
+#   - name: SOME_API_KEY
+#     secret: DB.SCHEMA.API_KEY
+#   - name: SOME_USER_PASS
+#     secret: DB.SCHEMA.API_KEY_2
+#
+# environment_variables:
+#   - name: LOG_LEVEL
+#     value: "INFO"

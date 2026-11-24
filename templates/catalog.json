@@ -1,0 +1,254 @@
+{
+  "catalog_version": 1,
+  "templates": [
+    {
+      "id": "nextjs",
+      "path": "templates/nextjs",
+      "title": "Next.js",
+      "summary": "A Next.js app in TypeScript and React, with Tailwind CSS, shadcn/ui components, and Recharts. Ships a welcome page to replace.",
+      "when_to_use": "The default: rich interactive UIs, charts, client-side state, or when no language or framework is named.",
+      "when_not_to_use": "The app must use Streamlit, or Python.",
+      "runtime": "node",
+      "framework": "nextjs",
+      "requires": [],
+      "surfaces": [
+        "cli",
+        "workspaces"
+      ],
+      "default": true,
+      "digest": "sha256:0e85c22c6f6b0d717ddb14ac7c6395825a3cac0e77e4fb48c55f37e39c56d001",
+      "files": [
+        {
+          "path": ".gitignore",
+          "size": 472,
+          "sha256": "ba39e86e87ea38d0067a9c9d99625a6ba0a00c08af6e14298d12d5f06dbc546a"
+        },
+        {
+          "path": "AGENTS.md",
+          "size": 2254,
+          "sha256": "6335769eb7d130fac617c3527da5c4bb17c6d08ca2c46cee21764363d5644a84"
+        },
+        {
+          "path": "README.md",
+          "size": 54221,
+          "sha256": "2f3d56a164a3246afcd1063a82b51a60f29e3183b00f1ec7bfd491b161480b69"
+        },
+        {
+          "path": "__tests__/api/query.test.ts",
+          "size": 3607,
+          "sha256": "657e5cfb5cc3d5c15fbb6b666c0e6fd9da30a24525632989ae5a57f73fc9603d"
+        },
+        {
+          "path": "__tests__/lib/chart-utils.test.ts",
+          "size": 761,
+          "sha256": "7d8f30b3e88fa236415e36dc6084238dfa69309ef0285b31126559df8813c6c4"
+        },
+        {
+          "path": "__tests__/lib/describe-property.test.ts",
+          "size": 1300,
+          "sha256": "3d13935be0a294e1db8640d6bde159dd1e7753db9116a52347c7530874f09074"
+        },
+        {
+          "path": "__tests__/lib/format.test.ts",
+          "size": 3562,
+          "sha256": "34164a8f3072ba627a5bfe5cc4ab6a73c16024b985f441cd176cdbac65b112ba"
+        },
+        {
+          "path": "__tests__/lib/run-as.test.ts",
+          "size": 4549,
+          "sha256": "88f55c74427f4142b8ac893b61af309939bdb764093bae78294772eb07d232bf"
+        },
+        {
+          "path": "__tests__/lib/snowflake.test.ts",
+          "size": 6347,
+          "sha256": "a9b0a89165b348c7c56f1f3f2f167dd80ee2bb857ad936201ae37c73a1bafb7f"
+        },
+        {
+          "path": "app.yml",
+          "size": 1674,
+          "sha256": "c155602c80827bdc44699f5df401b709bedb377086ad19f7338eecfe9b1794d6"
+        },
+        {
+          "path": "app/api/query/route.ts",
+          "size": 1678,
+          "sha256": "464d30871a6ce5cc8a1d481f348203c4a5e1848b078aba712957be6f74500ca2"
+        },
+        {
+          "path": "app/globals.css",
+          "size": 4718,
+          "sha256": "30a2a96088f3a0ae71b02b2ad1d5b3d37286f02a998adda2f19dc398ebbd7973"
+        },
+        {
+          "path": "app/layout.tsx",
+          "size": 1271,
+          "sha256": "9bf0d4205ebdb06429f1672ea88e57a3029066b78a345220dd5624dc2212b1a8"
+        },
+        {
+          "path": "app/page.tsx",
+          "size": 8479,
+          "sha256": "874d2c1409dd5c98b21bd98f2a892c15134449e1ed009cbd3189a7589aca958a"
+        },
+        {
+          "path": "components.json",
+          "size": 306,
+          "sha256": "687a3b72450f877850940117ad2bb822dafb154248aaa8a9fd0c14a6c5214069"
+        },
+        {
+          "path": "components/chart-utils.tsx",
+          "size": 5306,
+          "sha256": "498ebf9045689fbd0e670af1efece56d5becb45c99c4b04d73ab651c7569d46b"
+        },
+        {
+          "path": "components/count-up.tsx",
+          "size": 1295,
+          "sha256": "da4414a0f65eb7c456545f04861e967866c02ddda69b9636bd0deaba01879ee1"
+        },
+        {
+          "path": "components/query-provider.tsx",
+          "size": 337,
+          "sha256": "b1e783b47f4ec681e151bea3e87629a9cdd2ac24cfe3e254c8f8827da24df83b"
+        },
+        {
+          "path": "components/theme-provider.tsx",
+          "size": 2107,
+          "sha256": "7b6ed26e43af66fc90aa6dd25e5ffff10b1c380e73d65543e8f765bc83d7828a"
+        },
+        {
+          "path": "components/theme-toggle.tsx",
+          "size": 933,
+          "sha256": "0062001aa648e2331eede4948ae109df379ade4f38060ec493a7a61f2df45520"
+        },
+        {
+          "path": "components/ui/alert.tsx",
+          "size": 1575,
+          "sha256": "d5aa90e28770d8ffd43ab433214eca68b4578a539f471b5006e4331f5cbe9812"
+        },
+        {
+          "path": "components/ui/badge.tsx",
+          "size": 1243,
+          "sha256": "bdab83712399d691405c00907c526d2f3a46cc9e63d0c7e48e567b6ff3bd1f9d"
+        },
+        {
+          "path": "components/ui/button.tsx",
+          "size": 1744,
+          "sha256": "d71b3eeab2db37988411d7aa693460e2350b9405093e0438f180064623d3172f"
+        },
+        {
+          "path": "components/ui/card.tsx",
+          "size": 1975,
+          "sha256": "13685b1029185b29c6bf389514eb8ace9a8f67a90037b95a6b4aa780f806ad7a"
+        },
+        {
+          "path": "components/ui/dialog.tsx",
+          "size": 3800,
+          "sha256": "5c4ffd5349f2a0f27c478aeac41916c2ce24765ed2151d0c1415b90bd552ee97"
+        },
+        {
+          "path": "components/ui/separator.tsx",
+          "size": 738,
+          "sha256": "2e69962084dfa71b6f0d8d0ef11f286769a105add764e6a9159c3fdc91aaa737"
+        },
+        {
+          "path": "components/ui/sheet.tsx",
+          "size": 4234,
+          "sha256": "27342d744b43f7be8b8604939ef4d265bb5af33a11a1f5014656cbe57117d658"
+        },
+        {
+          "path": "components/ui/skeleton.tsx",
+          "size": 256,
+          "sha256": "1cdc66b5c1341f367cb9b00e57298a7e92b934f9d01bba544807d37da08bc020"
+        },
+        {
+          "path": "components/ui/table.tsx",
+          "size": 3718,
+          "sha256": "664bc3f53a3b18aa3629965284ef3f1b41a09b4c0370fbf3eec160651af7e8d4"
+        },
+        {
+          "path": "components/welcome/copy-prompt.tsx",
+          "size": 1165,
+          "sha256": "a9c470878d94bede34d3e0d98f95e94edbce395721d60102db278a86cab51b19"
+        },
+        {
+          "path": "lib/clipboard.ts",
+          "size": 853,
+          "sha256": "5b4b8d669bfbed7b3ab42740d482da102ba5cf3b73254a924f0ebb37585cf4de"
+        },
+        {
+          "path": "lib/constants.ts",
+          "size": 476,
+          "sha256": "eb6da1689fc929a858c1ec86bbbed045b6437563eedd0334da16e9a4680b9dc4"
+        },
+        {
+          "path": "lib/describe-property.ts",
+          "size": 1090,
+          "sha256": "e768db4ad43277b4843683ffd0f4ff3964b8cc62175c5ad96a891d583185e60f"
+        },
+        {
+          "path": "lib/format.ts",
+          "size": 5571,
+          "sha256": "c8f1f23f169bb657c21df46439e5f916f64e02c94b3302eca5079f6ad53e345a"
+        },
+        {
+          "path": "lib/run-as.ts",
+          "size": 2448,
+          "sha256": "d7bb104db660f14d6229089ae89a43652de4692b27d02e49518b92882482d859"
+        },
+        {
+          "path": "lib/snowflake.ts",
+          "size": 3836,
+          "sha256": "ad51798f79df753ab603a623a16a56ab5ef4a2e3990a7683aa6edc454bf3b3d6"
+        },
+        {
+          "path": "lib/utils.ts",
+          "size": 169,
+          "sha256": "9304a861c8673bee09e0f12de31773abbde503b02e59dfd74763ddec2e37cf05"
+        },
+        {
+          "path": "next-env.d.ts",
+          "size": 251,
+          "sha256": "84a939f786f98e17a63b0c640113a79a0301e966555f8d1b63611cd5f6615f6a"
+        },
+        {
+          "path": "next.config.mjs",
+          "size": 1231,
+          "sha256": "d872fc12658cba47486cdcd29c93875eb9fe412f816d56c3c3100125076c2306"
+        },
+        {
+          "path": "package-lock.json",
+          "size": 224183,
+          "sha256": "37b6b5eb749e21d6261a70a9f233ed6caff120e97e8af2c1b648b7c646afa5b4"
+        },
+        {
+          "path": "package.json",
+          "size": 1053,
+          "sha256": "6dd552db277330a6e55b8931dbac39f210f1f6fad1dd28d0e289ef79b02bfc34"
+        },
+        {
+          "path": "postcss.config.mjs",
+          "size": 69,
+          "sha256": "4e5cb2a60ddeb45b492a1eb5dbc755d342b0cd2d5efc4e2c84094e62bd94f065"
+        },
+        {
+          "path": "public/icon.svg",
+          "size": 8054,
+          "sha256": "71cae49b18b6d0e0ffbd3734fc09c8bf6c8ed66ff18174582b2b231850cb9e22"
+        },
+        {
+          "path": "scripts/screenshot.py",
+          "size": 2058,
+          "sha256": "9737ebdd75d7b433f0448ddc7b90dd139e2b26bad7488440064d36dc29463872"
+        },
+        {
+          "path": "tsconfig.json",
+          "size": 670,
+          "sha256": "3c3825832b79240516278f83e0696e10a3359a6e6636fb8378ee756f6eee65a2"
+        },
+        {
+          "path": "vitest.config.ts",
+          "size": 246,
+          "sha256": "3c08d07fef678a029b0f102aa9208b60e67c319130c3dc20564fde6c79ff58ac"
+        }
+      ]
+    }
+  ]
+}

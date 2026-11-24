@@ -40,3 +40,8 @@ Each language directory has its own toolchain, checks, and changelog. Its guide 
 workflow, API rules, versioning, and release checklist:
 
 - [Node.js](nodejs/CONTRIBUTING.md), in `nodejs/`
+
+## Templates
+
+App templates live in `templates/`. [templates/README.md](templates/README.md) covers their layout,
+placeholders, and the generated catalog.

@@ -1,0 +1,165 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* dark: utilities follow the .dark class set by components/theme-provider.tsx */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * THEMING
+ * -------
+ * Every color is a CSS variable: light values in :root, dark overrides in .dark.
+ * These are a neutral starting point, not a house style. Replace them with the
+ * app's own palette (both blocks); components, focus rings and charts follow.
+ * Use tokens (bg-card, text-muted-foreground, border, bg-chart-2...) rather than
+ * hard-coded colors so dark mode keeps working.
+ */
+
+@layer base {
+  :root {
+    /* Accent used by the welcome page and the first chart series. */
+    --brand: #29b5e8;
+
+    --background: #ffffff;
+    --foreground: #1e222a;
+    --card: #ffffff;
+    --card-foreground: #1e222a;
+    --popover: #ffffff;
+    --popover-foreground: #1e222a;
+
+    --primary: #1a6ce7;
+    --primary-foreground: #ffffff;
+    --secondary: #f2f4f7;
+    --secondary-foreground: #1e222a;
+    --muted: #f6f7f9;
+    --muted-foreground: #5f6776;
+    --accent: #eef1f5;
+    --accent-foreground: #1e222a;
+    --destructive: #d1242f;
+    --destructive-foreground: #ffffff;
+    --border: #e1e4ea;
+    --input: #d5d9e0;
+    --ring: #1a6ce7;
+    --radius: 0.5rem;
+
+    --success: #13804b;
+    --warning: #b25e09;
+
+    /* Chart series stay distinct from each other in both modes. */
+    --chart-1: var(--brand);
+    --chart-2: #5b5fd6;
+    --chart-3: #e0951c;
+    --chart-4: #1f9d6b;
+    --chart-5: #d9486f;
+    --chart-grid: #eceef2;
+    --chart-axis: #6b7280;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-brand: var(--brand);
+  /* System font stacks by default; each app picks its own fonts (README, Designing the app). */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  .dark {
+    --background: #111318;
+    --foreground: #e7e9ed;
+    --card: #171a20;
+    --card-foreground: #e7e9ed;
+    --popover: #1c2027;
+    --popover-foreground: #e7e9ed;
+    --primary: #4c8ff5;
+    --primary-foreground: #0b1220;
+    --secondary: #1f232b;
+    --secondary-foreground: #e7e9ed;
+    --muted: #1a1d24;
+    --muted-foreground: #9aa1ae;
+    --accent: #232831;
+    --accent-foreground: #e7e9ed;
+    --destructive: #f0616a;
+    --destructive-foreground: #111318;
+    --border: #2a2f38;
+    --input: #343a45;
+    --ring: #4c8ff5;
+    --success: #3fc285;
+    --warning: #f0a83c;
+    --chart-2: #8b8ff0;
+    --chart-3: #f2b04a;
+    --chart-4: #45c493;
+    --chart-5: #f07a99;
+    --chart-grid: #23272f;
+    --chart-axis: #8d94a1;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-feature-settings: 'ss01', 'cv11';
+    -webkit-font-smoothing: antialiased;
+  }
+  button:not(:disabled), [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+/* Motion: sections rise in once; bars grow from their baseline. Off under reduced motion. */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+@keyframes grow-x {
+  from {
+    transform: scaleX(0);
+  }
+}
+@utility animate-rise {
+  animation: rise 600ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@utility animate-grow-x {
+  animation: grow-x 800ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  transform-origin: left;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .animate-grow-x {
+    animation: none;
+  }
+}

@@ -37,6 +37,12 @@ Run these in `nodejs/`, with Node.js 22 or 24 and npm 11.18.0.
 To list the files the mirror publishes, run `bash scripts/mirroring/copybara.sh verify` from the
 repository root. It needs Docker and checks `HEAD`.
 
+## Templates
+
+App templates live in `templates/`, described in [templates/README.md](templates/README.md). After
+changing one, run `node scripts/templates/catalog.mjs` from the repository root and commit the
+regenerated `templates/catalog.json`. With `--check`, it verifies the catalog without writing it.
+
 ## Done means
 
 - `npm run check` passes in `nodejs/`.
@@ -44,6 +50,8 @@ repository root. It needs Docker and checks `HEAD`.
   and no real credentials or local configuration files. The exception is `nodejs/integration/`,
   which connects to a real test account, runs only via `npm run test:integration`, and reads its
   credentials from the environment.
+- A template change comes with a regenerated `templates/catalog.json`, and the template still
+  installs, builds, and runs.
 - A user-visible change has an entry under Unreleased in
   [nodejs/CHANGELOG.md](nodejs/CHANGELOG.md), and a breaking one starts with **Breaking:**.
 - A change to the export map, public types, defaults, error codes, or fallback rules is called out
