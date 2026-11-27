@@ -16,7 +16,7 @@
         "workspaces"
       ],
       "default": true,
-      "digest": "sha256:0e85c22c6f6b0d717ddb14ac7c6395825a3cac0e77e4fb48c55f37e39c56d001",
+      "digest": "sha256:d97956bfc8006707b046b5ca47e4d301ff8af0f85125f3ff2c254a6a28a4a06b",
       "files": [
         {
           "path": ".gitignore",
@@ -215,13 +215,13 @@
         },
         {
           "path": "package-lock.json",
-          "size": 224183,
-          "sha256": "37b6b5eb749e21d6261a70a9f233ed6caff120e97e8af2c1b648b7c646afa5b4"
+          "size": 224316,
+          "sha256": "2c86c2da0d9b190e53be652c23545df4b41461914dcb8ec02bdf8f1e78af8d0a"
         },
         {
           "path": "package.json",
           "size": 1053,
-          "sha256": "6dd552db277330a6e55b8931dbac39f210f1f6fad1dd28d0e289ef79b02bfc34"
+          "sha256": "0246ed150576c4d8d7b2d4aa690b883315457d40528bc8483e6dd4632fd0711a"
         },
         {
           "path": "postcss.config.mjs",
